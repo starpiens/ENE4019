@@ -1,2 +1,9 @@
+# Mac Finder
+.DS_Store
+
+# IntelliJ
 .idea/
 *.iml
+
+# Binaries
+out/
