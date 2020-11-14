@@ -37,7 +37,9 @@ public class Response {
     }
 
     public String toString() {
-        return Integer.toString(returnCode.getCodeNum()) + " " + message + "\n";
+        String string = returnCode.getCodeNum() + " " + message + "\n";
+        if (!message.endsWith("\n")) string += "\n";
+        return string;
     }
 
 }

@@ -32,21 +32,20 @@ public class Server {
             writeResponse(new Response(ReturnCode.SERVICE_READY, "Hello\n"));
 
             while (true) {
-                String request = getRequest();
-                if (request == null) continue;
-                String cmd = request.substring(0, request.indexOf(' '));
-                String arg = request.substring(request.indexOf(' ') + 1);
-                writeResponse(runCmd(cmd, arg));
-                if (cmd.equalsIgnoreCase("quit")) break;
+                String[] request = getRequest();
+                Response response = processRequest(request);
+                writeResponse(response);
+                if (response.returnCode.equals(ReturnCode.SERVICE_CLOSING))
+                    break;
             }
 
             cmdSocket.close();
         }
 
-        protected String getRequest() throws IOException {
+        protected String[] getRequest() throws IOException {
             String str = cmdReader.readLine();
             System.out.println("Request: " + str);
-            return str;
+            return str.trim().split("[ ]+");
         }
 
         protected void writeResponse(Response response) throws IOException {
@@ -56,22 +55,26 @@ public class Server {
             System.out.println("Response: " + responseStr.substring(0, responseStr.indexOf('\n')));
         }
 
-        protected Response runCmd(String cmd, String arg) {
-            cmd = cmd.toLowerCase();
-            if (cmd.equals("list")) {
-                return _list(arg);
-            } else if (cmd.equals("get")) {
-                return _get(arg);
+        protected Response processRequest(String[] request) {
+            request[0] = request[0].toLowerCase();
+            if (request[0].equals("list")) {
+                return _list(request);
+            } else if (request[0].equals("get")) {
+                return _get(request);
+            } else if (request[0].equals("quit")) {
+                return new Response(ReturnCode.SERVICE_CLOSING, "Bye");
+            } else if (request[0].isEmpty()) {
+                return new Response(ReturnCode.UNRECOGNIZED, "");
             } else {
                 return new Response(ReturnCode.UNRECOGNIZED, "Unknown command\n");
             }
         }
 
-        protected Response _list(String arg) {
+        protected Response _list(String[] request) {
             return new Response(ReturnCode.SUCCESS, "OK\n");
         }
 
-        protected Response _get(String arg) {
+        protected Response _get(String[] request) {
             return new Response(ReturnCode.SUCCESS, "OK\n");
         }
 

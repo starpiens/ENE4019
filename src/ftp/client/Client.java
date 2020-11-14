@@ -36,10 +36,11 @@ public class Client {
     protected Response getResponse() throws IOException {
         StringBuilder responseStr = new StringBuilder();
         String responseStrLine;
-        do {
+        while (true) {
             responseStrLine = cmdReader.readLine();
+            if (responseStrLine.isEmpty()) break;
             responseStr.append(responseStrLine).append('\n');
-        } while (!responseStrLine.isEmpty());
+        }
         Response response = new Response(responseStr.toString());
         System.out.print(response.message);
         return response;
@@ -50,6 +51,7 @@ public class Client {
     }
 
     protected String readStd() throws IOException {
+        System.out.print("> ");
         return stdReader.readLine();
     }
 }
