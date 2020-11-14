@@ -1,10 +1,16 @@
+import FTP.Command;
 import java.io.BufferedReader;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.Socket;
 
-public class FTPClient {
+public class Client {
+
+    protected boolean isExitCmd(String cmdLine) {
+        String[] cmdSplit = cmdLine.split("[ ]+");
+        return cmdSplit[0].equalsIgnoreCase("quit");
+    }
 
     public void start(String host, int ctrlPort, int dataPort) throws IOException {
         Socket socket = new Socket(host, ctrlPort);
@@ -14,10 +20,10 @@ public class FTPClient {
 
         while (true) {
             String commandLine = stdReader.readLine();
-            if (commandLine.split("[ ]+")[0].equalsIgnoreCase("quit")) {
+            ctrlOutStream.writeBytes(commandLine + '\n');
+            if (isExitCmd(commandLine)) {
                 break;
             }
-            ctrlOutStream.writeBytes(commandLine + '\n');
             String responseLine = ctrlReader.readLine();
             System.out.println(responseLine);
         }
@@ -36,7 +42,7 @@ public class FTPClient {
         } catch (ArrayIndexOutOfBoundsException ignored) {
         }
 
-        FTPClient client = new FTPClient();
+        Client client = new Client();
         client.start(host, ctrlPort, dataPort);
     }
 }
