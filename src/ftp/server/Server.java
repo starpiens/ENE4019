@@ -1,3 +1,8 @@
+package ftp.server;
+
+import ftp.Response;
+import ftp.ReturnCode;
+
 import java.io.BufferedReader;
 import java.io.DataOutputStream;
 import java.io.IOException;
@@ -5,90 +10,81 @@ import java.io.InputStreamReader;
 import java.net.ServerSocket;
 import java.net.Socket;
 
-import FTP.ReturnCode;
-
 public class Server {
 
-    protected class ClientStatus {
-        String pwd;
-    }
+    static class ClientManager {
 
-    protected class Response {
-        ReturnCode returnCode;
-        String phrase;
+        // Networking
+        protected Socket cmdSocket;
+        protected BufferedReader cmdReader;
+        protected DataOutputStream cmdOutStream;
+        protected int dataPort;
 
-        Response(ReturnCode returnCode, String phrase) {
-            this.returnCode = returnCode;
-            this.phrase = phrase;
-        }
+        // Client status
+        protected String pwd;
 
-        public String toString() {
-            return Integer.toString(returnCode.getCodeNum()) + " " + phrase;
-        }
-    }
 
-    protected Response _list(String arg) {
-        return new Response(Return)
-    }
+        public void start(Socket cmdSocket, int dataPort) throws IOException {
+            this.cmdSocket = cmdSocket;
+            this.dataPort = dataPort;
+            cmdReader = new BufferedReader(new InputStreamReader(cmdSocket.getInputStream()));
+            cmdOutStream = new DataOutputStream(cmdSocket.getOutputStream());
+            writeResponse(new Response(ReturnCode.SERVICE_READY, "Hello\n"));
 
-    protected String getRequest(BufferedReader reader) throws IOException {
-        String str = reader.readLine();
-        System.out.println("Request: " + str);
-        return str;
-    }
-
-    protected void writeResponse(DataOutputStream stream, Response response) throws IOException {
-        stream.writeBytes(response.toString() + '\n');
-        System.out.println(response.toString());
-    }
-
-    protected void serveClient(Socket cmdSocket, int dataPort) throws IOException {
-        // Setup IO stream and test.
-        BufferedReader cmdReader = new BufferedReader(new InputStreamReader(cmdSocket.getInputStream()));
-        DataOutputStream cmdOutStream = new DataOutputStream(cmdSocket.getOutputStream());
-
-        writeResponse(cmdOutStream, new Response(ReturnCode.SERVICE_READY, "Hello"));
-
-        // Serve client.
-        while (true) {
-            String request = getRequest(cmdReader);
-            String cmd = request.substring(0, request.indexOf(' ')).toLowerCase();
-            String arg = request.substring(request.indexOf(' ') + 1);
-            Response response;
-
-            if (cmd.equals("list")) {
-                response = _list(arg);
-            } else if (cmd.equals("get")) {
-                ;
-            } else if (cmd.equals("quit")) {
-                break;
-            } else {
-                response = new Response(ReturnCode.SERVICE_CLOSING, "Bye");
+            while (true) {
+                String request = getRequest();
+                if (request == null) continue;
+                String cmd = request.substring(0, request.indexOf(' '));
+                String arg = request.substring(request.indexOf(' ') + 1);
+                writeResponse(runCmd(cmd, arg));
+                if (cmd.equalsIgnoreCase("quit")) break;
             }
-            writeResponse(cmdOutStream, response);
+
+            cmdSocket.close();
         }
 
-        writeResponse(cmdOutStream, new Response(ReturnCode.SERVICE_CLOSING, "Bye"));
+        protected String getRequest() throws IOException {
+            String str = cmdReader.readLine();
+            System.out.println("Request: " + str);
+            return str;
+        }
+
+        protected void writeResponse(Response response) throws IOException {
+            String responseStr = response.toString();
+            cmdOutStream.writeBytes(responseStr);
+            // Print only first line
+            System.out.println("Response: " + responseStr.substring(0, responseStr.indexOf('\n')));
+        }
+
+        protected Response runCmd(String cmd, String arg) {
+            cmd = cmd.toLowerCase();
+            if (cmd.equals("list")) {
+                return _list(arg);
+            } else if (cmd.equals("get")) {
+                return _get(arg);
+            } else {
+                return new Response(ReturnCode.UNRECOGNIZED, "Unknown command\n");
+            }
+        }
+
+        protected Response _list(String arg) {
+            return new Response(ReturnCode.SUCCESS, "OK\n");
+        }
+
+        protected Response _get(String arg) {
+            return new Response(ReturnCode.SUCCESS, "OK\n");
+        }
+
     }
+
 
     public void start(int cmdPort, int dataPort) throws IOException {
         ServerSocket serverSocket = new ServerSocket(cmdPort);
         while (true) {
-            Socket ctrlSocket = serverSocket.accept();
-            serveClient(ctrlSocket, dataPort);
+            Socket cmdSocket = serverSocket.accept();
+            ClientManager manager = new ClientManager();
+            manager.start(cmdSocket, dataPort);
         }
     }
 
-    public static void main(String[] args) throws IOException {
-        int cmdPort = 2020;
-        int dataPort = 2021;
-        try {
-            cmdPort = Integer.parseInt(args[0]);
-            dataPort = Integer.parseInt(args[1]);
-        } catch (ArrayIndexOutOfBoundsException ignored) {
-        }
-
-        Server server = new Server();
-        server.start(cmdPort, dataPort);
-    }
 }

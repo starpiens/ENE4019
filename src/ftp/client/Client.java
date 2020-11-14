@@ -1,4 +1,8 @@
-import FTP.Command;
+package ftp.client;
+
+import ftp.Response;
+import ftp.ReturnCode;
+
 import java.io.BufferedReader;
 import java.io.DataOutputStream;
 import java.io.IOException;
@@ -7,42 +11,45 @@ import java.net.Socket;
 
 public class Client {
 
-    protected boolean isExitCmd(String cmdLine) {
-        String[] cmdSplit = cmdLine.split("[ ]+");
-        return cmdSplit[0].equalsIgnoreCase("quit");
+    // Networking
+    protected int dataPort;
+    protected Socket cmdSocket;
+    BufferedReader stdReader;
+    BufferedReader cmdReader;
+    DataOutputStream ctrlOutStream;
+
+
+    public void start(String host, int cmdPort, int dataPort) throws IOException {
+        this.dataPort = dataPort;
+        cmdSocket = new Socket(host, cmdPort);
+        stdReader = new BufferedReader(new InputStreamReader(System.in));
+        cmdReader = new BufferedReader(new InputStreamReader(cmdSocket.getInputStream()));
+        ctrlOutStream = new DataOutputStream(cmdSocket.getOutputStream());
+
+        Response response = getResponse();
+        while (!response.returnCode.equals(ReturnCode.SERVICE_CLOSING)) {
+            writeRequest(readStd());
+            response = getResponse();
+        }
     }
 
-    public void start(String host, int ctrlPort, int dataPort) throws IOException {
-        Socket socket = new Socket(host, ctrlPort);
-        BufferedReader stdReader = new BufferedReader(new InputStreamReader(System.in));
-        BufferedReader ctrlReader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-        DataOutputStream ctrlOutStream = new DataOutputStream(socket.getOutputStream());
-
-        while (true) {
-            String commandLine = stdReader.readLine();
-            ctrlOutStream.writeBytes(commandLine + '\n');
-            if (isExitCmd(commandLine)) {
-                break;
-            }
-            String responseLine = ctrlReader.readLine();
-            System.out.println(responseLine);
-        }
-
-        socket.close();
+    protected Response getResponse() throws IOException {
+        StringBuilder responseStr = new StringBuilder();
+        String responseStrLine;
+        do {
+            responseStrLine = cmdReader.readLine();
+            responseStr.append(responseStrLine).append('\n');
+        } while (!responseStrLine.isEmpty());
+        Response response = new Response(responseStr.toString());
+        System.out.print(response.message);
+        return response;
     }
 
-    public static void main(String[] args) throws IOException {
-        String host = "127.0.0.1";
-        int ctrlPort = 2020;
-        int dataPort = 2021;
-        try {
-            host = args[0];
-            ctrlPort = Integer.parseInt(args[1]);
-            dataPort = Integer.parseInt(args[2]);
-        } catch (ArrayIndexOutOfBoundsException ignored) {
-        }
+    protected void writeRequest(String request) throws IOException {
+        ctrlOutStream.writeBytes(request + '\n');
+    }
 
-        Client client = new Client();
-        client.start(host, ctrlPort, dataPort);
+    protected String readStd() throws IOException {
+        return stdReader.readLine();
     }
 }
