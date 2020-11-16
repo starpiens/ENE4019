@@ -5,14 +5,26 @@ import java.util.Map;
 
 public class Response {
 
+    /**
+     * Response format:
+     * returnCode message\n
+     * message\n
+     * message\n
+     * \n\n
+     */
+
     public ReturnCode returnCode;
     public String message;
 
     protected static Map<Integer, ReturnCode> int2code = new HashMap<>();
 
 
-    public Response(ReturnCode returnCode, String message) {
+    public Response(ReturnCode returnCode) {
         this.returnCode = returnCode;
+    }
+
+    public Response(ReturnCode returnCode, String message) {
+        this(returnCode);
         this.message = message;
     }
 

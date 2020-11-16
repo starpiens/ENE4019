@@ -1,6 +1,8 @@
 import ftp.client.Client;
 
 import java.io.IOException;
+import java.net.ConnectException;
+import java.util.concurrent.TimeUnit;
 
 public class FTPClient {
 
@@ -16,7 +18,19 @@ public class FTPClient {
         }
 
         Client client = new Client();
-        client.start(host, cmdPort, dataPort);
+        while (true) {
+            try {
+                client.start(host, cmdPort, dataPort);
+                break;
+            } catch (ConnectException exception) {
+                System.out.println("Failed to connect server. Retrying.. ");
+                try {
+                    TimeUnit.SECONDS.sleep(1);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
     }
 
 }
