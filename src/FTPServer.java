@@ -6,7 +6,7 @@ import java.nio.file.Path;
 
 public class FTPServer {
 
-    public static void main(String[] args) throws IOException, NoSuchMethodException, IllegalAccessException, InvocationTargetException {
+    public static void main(String[] args) {
         int cmdPort = 2020;
         int dataPort = 2021;
         try {
@@ -16,7 +16,11 @@ public class FTPServer {
         }
 
         Server server = new Server(System.getProperty("user.dir"));
-        server.start(cmdPort, dataPort);
+        try {
+            server.start(cmdPort, dataPort);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 
 }

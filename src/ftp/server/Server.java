@@ -49,7 +49,7 @@ public class Server {
 
                 cmdSocket.close();
 
-            } catch (IOException | ClientDownException e) {
+            } catch (ClientDownException | IOException e) {
                 System.out.println("Connection terminated: " + cmdSocket.getInetAddress());
             }
         }
@@ -69,20 +69,31 @@ public class Server {
         }
 
         protected Response processRequest(String[] request) throws ClientDownException {
-            request[0] = request[0].toLowerCase();
-            Method method = commands.get(request[0]);
+            // Find method
+            Method method = commands.get(request[0].toLowerCase());
             if (method == null) {
                 return new Response(ReturnCode.UNRECOGNIZED, "Unknown command\n");
             } else {
                 try {
+                    // Call method
                     return (Response) method.invoke(this, (Object) request);
+
                 } catch (IllegalAccessException e) {
+                    // This must be not thrown. Server down.
                     e.printStackTrace();
-                    return null;
+                    exit(1);
+
                 } catch (InvocationTargetException e) {
-                    throw new ClientDownException();
+                    // Check whether class is down or not.
+                    if (e.getCause().getClass().equals(ClientDownException.class)) {
+                        throw (ClientDownException) e.getCause();
+                    } else {
+                        e.printStackTrace();
+                        exit(1);
+                    }
                 }
             }
+            return new Response("");
         }
 
         protected Response _list(String[] request) {
@@ -127,6 +138,8 @@ public class Server {
         }
 
         protected Response _get(String[] request) {
+
+
             return new Response(ReturnCode.SUCCESS, "OK\n");
         }
 
@@ -135,6 +148,8 @@ public class Server {
         }
 
         protected Response _cd(String[] request) {
+            if 
+
             return new Response(ReturnCode.SUCCESS, "OK\n");
         }
 

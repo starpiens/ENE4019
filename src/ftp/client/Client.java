@@ -7,9 +7,14 @@ import java.io.BufferedReader;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.net.ConnectException;
 import java.net.Socket;
 
 public class Client {
+
+    protected class ConnectionTerminatedException extends Exception {
+    }
+
 
     // Networking
     protected int dataPort;
@@ -26,18 +31,23 @@ public class Client {
         cmdReader = new BufferedReader(new InputStreamReader(cmdSocket.getInputStream()));
         ctrlOutStream = new DataOutputStream(cmdSocket.getOutputStream());
 
-        Response response = getResponse();
-        while (!response.returnCode.equals(ReturnCode.SERVICE_CLOSING)) {
-            writeRequest(readStd());
-            response = getResponse();
+        try {
+            Response response = getResponse();
+            while (!response.returnCode.equals(ReturnCode.SERVICE_CLOSING)) {
+                writeRequest(readStd());
+                response = getResponse();
+            }
+        } catch (IOException | ConnectionTerminatedException e) {
+            System.out.println("Connection Terminated.");
         }
     }
 
-    protected Response getResponse() throws IOException {
+    protected Response getResponse() throws IOException, ConnectionTerminatedException {
         StringBuilder responseStr = new StringBuilder();
         String responseStrLine;
         while (true) {
             responseStrLine = cmdReader.readLine();
+            if (responseStrLine == null) throw new ConnectionTerminatedException();
             if (responseStrLine.isEmpty()) break;
             responseStr.append(responseStrLine).append('\n');
         }

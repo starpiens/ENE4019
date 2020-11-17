@@ -2,13 +2,15 @@ package ftp;
 
 public enum ReturnCode {
 
+    // Unknown code
     UNKNOWN(-1),
 
     // 200 Series
     // The requested action has been successfully completed.
     SUCCESS(200),               // Command okay.
-    SERVICE_READY(220),
-    SERVICE_CLOSING(221),
+    DIR_STATUS(212),            // Directory status.
+    SERVICE_READY(220),         // Service ready for new user.
+    SERVICE_CLOSING(221),       // Service closing control connection.
 
     // 500 Series
     // Syntax error, command unrecognized and the requested action did not take place.
