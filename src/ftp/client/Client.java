@@ -1,5 +1,6 @@
 package ftp.client;
 
+import ftp.DataChunkC2S;
 import ftp.DataChunkS2C;
 import ftp.Response;
 import ftp.ReturnCode;
@@ -37,6 +38,8 @@ public class Client {
                 String request = readStd();
                 if (isGET(request)) {
                     _get(request);
+                } else if (isPUT(request)) {
+                    _put(request);
                 } else {
                     writeRequest(request);
                     response = getResponse();
@@ -106,8 +109,52 @@ public class Client {
         }
 
         System.out.println("  Done.");
+        dataSocket.close();
         dataInputStream.close();
         fileOutputStream.close();
+        return 0;
+    }
+
+    protected boolean isPUT(String request) {
+        String[] requestSplit = request.trim().split("[ ]+");
+        return (requestSplit[0].equalsIgnoreCase("put"));
+    }
+
+    protected int _put(String request) throws IOException, ConnectionTerminatedException {
+        String[] requestSplit = request.trim().split("[ ]+");
+        // Check for file.
+        File file = new File(requestSplit[1]);
+        if (!file.exists()) {
+            return 1;
+        }
+
+        writeRequest(request);
+
+        // Check for response, send target length.
+        Response response = getResponse();
+        if (response.returnCode != ReturnCode.SUCCESS) {
+            return 1;
+        }
+        writeRequest(String.valueOf(file.length()));
+
+        // Setup IO streams.
+        Socket dataSocket = new Socket(host, dataPort);
+        DataOutputStream dataOutputStream = new DataOutputStream(dataSocket.getOutputStream());
+        FileInputStream fileInputStream = new FileInputStream(file);
+
+        // Start sending.
+        for (byte seqNo = 0; ; seqNo++) {
+            byte[] data = fileInputStream.readNBytes(DataChunkC2S.maxDataSize);
+            if (data.length == 0) break;
+            DataChunkC2S chunk = new DataChunkC2S(seqNo, (short)data.length, data);
+            chunk.writeBytes(dataOutputStream);
+            System.out.print("#");
+        }
+
+        System.out.println("  Done.");
+        dataSocket.close();
+        dataOutputStream.close();
+        fileInputStream.close();
         return 0;
     }
 }

@@ -17,7 +17,8 @@ public enum ReturnCode {
     // This may include errors such as command line too long.
     UNRECOGNIZED(500),          // Syntax error, command unrecognized.
     ARGUMENT_ERR(501),          // Syntax error in parameters or arguments.
-    FILE_UNAVAILABLE(550);      // Requested action not taken. File unavailable (e.g., file not found, no access).
+    FILE_UNAVAILABLE(550),      // Requested action not taken. File unavailable (e.g., file not found, no access).
+    NAME_NOT_ALLOWED(553);               // Requested action not taken. File name not allowed.
 
     private final int codeNum;
 

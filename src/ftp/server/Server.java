@@ -1,5 +1,6 @@
 package ftp.server;
 
+import ftp.DataChunkC2S;
 import ftp.DataChunkS2C;
 import ftp.Response;
 import ftp.ReturnCode;
@@ -51,6 +52,8 @@ public class Server {
                 System.out.println("Connection terminated: " + cmdSocket.getInetAddress());
                 try {
                     cmdSocket.close();
+                    cmdReader.close();
+                    cmdOutStream.close();
                 } catch (IOException ignored) {
                 }
             }
@@ -213,13 +216,59 @@ public class Server {
             }
 
             System.out.println("  Done.");
+            dataSocket.close();
             dataOutputStream.close();
             fileInputStream.close();
             return 0;
         }
 
-        protected int _put(String[] request) {
+        protected int _put(String[] request) throws IOException, ConnectionDownException {
+            // Check arguments.
+            if (request.length != 2) {
+                writeResponse(new Response(
+                        ReturnCode.ARGUMENT_ERR,
+                        "Single argument required\n"
+                ));
+                return 1;
+            }
 
+            // Resolve target path.
+            File targetFile = pwd.toPath().resolve(request[1]).toFile();
+
+            // Check availability.
+            if (targetFile.exists()) {
+                // Target name already exists.
+                writeResponse(new Response(
+                        ReturnCode.NAME_NOT_ALLOWED,
+                        "File or directory already exists"
+                ));
+                return 1;
+            }
+
+            // Success, get target length.
+            writeResponse(new Response(
+                    ReturnCode.SUCCESS,
+                    "Ready to receive"
+            ));
+            int targetLength = Integer.parseInt(getRequest()[0]);
+
+            // Setup IO streams.
+            Socket dataSocket = serverDataSocket.accept();
+            DataInputStream dataInputStream = new DataInputStream(dataSocket.getInputStream());
+            FileOutputStream fileOutputStream = new FileOutputStream(targetFile);
+
+            // Start receiving.
+            for (byte seqNo = 0; seqNo * DataChunkC2S.maxDataSize < targetLength; seqNo++) {
+                byte[] bytes = dataInputStream.readNBytes(DataChunkC2S.maxChunkSize);
+                System.out.print("#");
+                DataChunkC2S chunk = new DataChunkC2S(bytes);
+                fileOutputStream.write(chunk.data);
+            }
+
+            System.out.println("  Done.");
+            dataSocket.close();
+            dataInputStream.close();
+            fileOutputStream.close();
             return 0;
         }
 
@@ -301,6 +350,7 @@ public class Server {
     public void start(int cmdPort, int dataPort) throws IOException {
         ServerSocket serverCmdSocket = new ServerSocket(cmdPort);
         ServerSocket serverDataSocket = new ServerSocket(dataPort);
+        System.out.println("Running.. ");
         while (true) {
             Socket cmdSocket = serverCmdSocket.accept();
             ClientManager manager = new ClientManager();
