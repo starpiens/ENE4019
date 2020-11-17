@@ -8,6 +8,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -17,7 +18,8 @@ public class Server {
 
     protected class ClientManager {
 
-        protected class ClientDownException extends Exception {}
+        protected class ClientDownException extends Exception {
+        }
 
 
         // Networking
@@ -97,23 +99,35 @@ public class Server {
         }
 
         protected Response _list(String[] request) {
-            // No argument
+            // Check arguments.
             if (request.length != 2)
                 return new Response(
                         ReturnCode.ARGUMENT_ERR,
                         "Single argument required\n"
                 );
 
-            File argFile = new File(request[1]);
-            File[] fileList;
-            if (argFile.isAbsolute()) {
-                fileList = argFile.listFiles();
-            } else {
-                fileList = (new File(pwd, request[1])).listFiles();
+            // Resolve target path.
+            File targetPath = pwd.toPath().resolve(request[1]).toFile();
+
+            if (!targetPath.exists()) {
+                // Target doesn't exist.
+                return new Response(
+                        ReturnCode.FILE_UNAVAILABLE,
+                        "Directory doesn't exist"
+                );
+            } else if (!targetPath.isDirectory()) {
+                // Target is not a directory.
+                return new Response(
+                        ReturnCode.FILE_UNAVAILABLE,
+                        "Not a directory"
+                );
             }
 
-            // In case of success
+            // Get file list.
+            File[] fileList = targetPath.listFiles();
+
             if (fileList != null) {
+                // In case of success
                 Response response = new Response(ReturnCode.SUCCESS);
                 response.message = "Comprising " + fileList.length +
                         (fileList.length < 2 ? " entry" : " entries") + "\n";
@@ -127,14 +141,13 @@ public class Server {
                 }
                 response.message += messageBuilder;
                 return response;
-            }
-            // In case of failure
-            else
+            } else {
+                // In case of failure
                 return new Response(
                         ReturnCode.FILE_UNAVAILABLE,
-                        "Directory name is invalid"
+                        "Unable to access. Check if you have enough permission."
                 );
-
+            }
         }
 
         protected Response _get(String[] request) {
@@ -147,10 +160,45 @@ public class Server {
             return new Response(ReturnCode.SUCCESS, "OK\n");
         }
 
-        protected Response _cd(String[] request) {
-            if 
+        protected Response _cd(String[] request) throws IOException {
+            // Check arguments.
+            if (request.length > 2)
+                return new Response(
+                        ReturnCode.ARGUMENT_ERR,
+                        "Too many arguments\n"
+                );
 
-            return new Response(ReturnCode.SUCCESS, "OK\n");
+            if (request.length == 1) {
+                // Print pwd
+                return new Response(
+                        ReturnCode.DIR_STATUS,
+                        String.valueOf(pwd)
+                );
+
+            } else {
+                // Resolve target path.
+                File targetPath = pwd.toPath().resolve(request[1]).toFile().getCanonicalFile();
+
+                if (!targetPath.exists()) {
+                    // Target doesn't exist.
+                    return new Response(
+                            ReturnCode.FILE_UNAVAILABLE,
+                            "Directory doesn't exist"
+                    );
+                } else if (!targetPath.isDirectory()) {
+                    // Target is not a directory.
+                    return new Response(
+                            ReturnCode.FILE_UNAVAILABLE,
+                            "Not a directory"
+                    );
+                }
+
+                pwd = targetPath;
+                return new Response(
+                        ReturnCode.SUCCESS,
+                        "Moved to " + pwd
+                );
+            }
         }
 
         protected Response _quit(String[] request) throws ClientDownException {
