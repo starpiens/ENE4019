@@ -7,3 +7,6 @@
 
 # Binaries
 out/
+
+# Test
+test*

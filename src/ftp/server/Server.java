@@ -1,5 +1,6 @@
 package ftp.server;
 
+import ftp.DataChunkS2C;
 import ftp.Response;
 import ftp.ReturnCode;
 
@@ -8,7 +9,6 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -18,7 +18,7 @@ public class Server {
 
     protected class ClientManager {
 
-        protected class ClientDownException extends Exception {
+        protected class ConnectionDownException extends Exception {
         }
 
 
@@ -26,15 +26,15 @@ public class Server {
         protected Socket cmdSocket;
         protected BufferedReader cmdReader;
         protected DataOutputStream cmdOutStream;
-        protected int dataPort;
+        protected ServerSocket serverDataSocket;
 
         // Client status
         protected File pwd = defaultPath;
 
 
-        public void start(Socket cmdSocket, int dataPort) {
+        public void start(Socket cmdSocket, ServerSocket serverDataSocket) {
             this.cmdSocket = cmdSocket;
-            this.dataPort = dataPort;
+            this.serverDataSocket = serverDataSocket;
             try {
                 cmdReader = new BufferedReader(new InputStreamReader(cmdSocket.getInputStream()));
                 cmdOutStream = new DataOutputStream(cmdSocket.getOutputStream());
@@ -43,22 +43,22 @@ public class Server {
 
                 while (true) {
                     String[] request = getRequest();
-                    Response response = processRequest(request);
-                    writeResponse(response);
-                    if (response.returnCode.equals(ReturnCode.SERVICE_CLOSING))
-                        break;
+                    processRequest(request);
                 }
 
-                cmdSocket.close();
-
-            } catch (ClientDownException | IOException e) {
+            } catch (ConnectionDownException | IOException ignored) {
+            } finally {
                 System.out.println("Connection terminated: " + cmdSocket.getInetAddress());
+                try {
+                    cmdSocket.close();
+                } catch (IOException ignored) {
+                }
             }
         }
 
-        protected String[] getRequest() throws IOException, ClientDownException {
+        protected String[] getRequest() throws IOException, ConnectionDownException {
             String str = cmdReader.readLine();
-            if (str == null) throw new ClientDownException();
+            if (str == null) throw new ConnectionDownException();
             System.out.println("Request: " + str);
             return str.trim().split("[ ]+");
         }
@@ -70,15 +70,17 @@ public class Server {
             System.out.println("Response: " + responseStr.substring(0, responseStr.indexOf('\n')));
         }
 
-        protected Response processRequest(String[] request) throws ClientDownException {
+        protected void processRequest(String[] request) throws ConnectionDownException, IOException {
             // Find method
             Method method = commands.get(request[0].toLowerCase());
+
             if (method == null) {
-                return new Response(ReturnCode.UNRECOGNIZED, "Unknown command\n");
+                writeResponse(new Response(ReturnCode.UNRECOGNIZED, "Unknown command\n"));
+
             } else {
                 try {
                     // Call method
-                    return (Response) method.invoke(this, (Object) request);
+                    method.invoke(this, (Object) request);
 
                 } catch (IllegalAccessException e) {
                     // This must be not thrown. Server down.
@@ -86,41 +88,47 @@ public class Server {
                     exit(1);
 
                 } catch (InvocationTargetException e) {
-                    // Check whether class is down or not.
-                    if (e.getCause().getClass().equals(ClientDownException.class)) {
-                        throw (ClientDownException) e.getCause();
+                    // Is connection down?
+                    if (e.getCause().getClass().equals(ConnectionDownException.class)
+                            || e.getCause().getClass().equals(IOException.class)) {
+                        throw (ConnectionDownException) e.getCause();
+
                     } else {
                         e.printStackTrace();
                         exit(1);
                     }
                 }
             }
-            return new Response("");
         }
 
-        protected Response _list(String[] request) {
+        protected int _list(String[] request) throws IOException {
             // Check arguments.
-            if (request.length != 2)
-                return new Response(
+            if (request.length != 2) {
+                writeResponse(new Response(
                         ReturnCode.ARGUMENT_ERR,
                         "Single argument required\n"
-                );
+                ));
+                return 1;
+            }
 
             // Resolve target path.
             File targetPath = pwd.toPath().resolve(request[1]).toFile();
 
             if (!targetPath.exists()) {
                 // Target doesn't exist.
-                return new Response(
+                writeResponse(new Response(
                         ReturnCode.FILE_UNAVAILABLE,
                         "Directory doesn't exist"
-                );
+                ));
+                return 1;
+
             } else if (!targetPath.isDirectory()) {
                 // Target is not a directory.
-                return new Response(
+                writeResponse(new Response(
                         ReturnCode.FILE_UNAVAILABLE,
                         "Not a directory"
-                );
+                ));
+                return 1;
             }
 
             // Get file list.
@@ -140,69 +148,130 @@ public class Server {
                         messageBuilder.append(file.length()).append("\n");
                 }
                 response.message += messageBuilder;
-                return response;
+                writeResponse(response);
+                return 0;
+
             } else {
                 // In case of failure
-                return new Response(
+                writeResponse(new Response(
                         ReturnCode.FILE_UNAVAILABLE,
                         "Unable to access. Check if you have enough permission."
-                );
+                ));
+                return 1;
             }
         }
 
-        protected Response _get(String[] request) {
-
-
-            return new Response(ReturnCode.SUCCESS, "OK\n");
-        }
-
-        protected Response _put(String[] request) {
-            return new Response(ReturnCode.SUCCESS, "OK\n");
-        }
-
-        protected Response _cd(String[] request) throws IOException {
+        protected int _get(String[] request) throws IOException {
             // Check arguments.
-            if (request.length > 2)
-                return new Response(
+            if (request.length != 2) {
+                writeResponse(new Response(
+                        ReturnCode.ARGUMENT_ERR,
+                        "Single argument required\n"
+                ));
+                return 1;
+            }
+
+            // Resolve target path.
+            File targetFile = pwd.toPath().resolve(request[1]).toFile();
+
+            // Check availability of the file.
+            if (!targetFile.exists()) {
+                // Target doesn't exist.
+                writeResponse(new Response(
+                        ReturnCode.FILE_UNAVAILABLE,
+                        "File doesn't exist"
+                ));
+                return 1;
+
+            } else if (!targetFile.isFile()) {
+                // Target is not a file.
+                writeResponse(new Response(
+                        ReturnCode.FILE_UNAVAILABLE,
+                        "Not a file"
+                ));
+                return 1;
+            }
+
+            // Success.
+            writeResponse(new Response(
+                    ReturnCode.SUCCESS,
+                    "Containing " + targetFile.length() + " bytes in total"
+            ));
+
+            // Setup IO streams.
+            Socket dataSocket = serverDataSocket.accept();
+            DataOutputStream dataOutputStream = new DataOutputStream(dataSocket.getOutputStream());
+            FileInputStream fileInputStream = new FileInputStream(targetFile);
+
+            // Start sending.
+            for (byte seqNo = 0; ; seqNo++) {
+                byte[] data = fileInputStream.readNBytes(DataChunkS2C.maxDataSize);
+                if (data.length == 0) break;
+                DataChunkS2C chunk = new DataChunkS2C(seqNo, data);
+                chunk.writeBytes(dataOutputStream);
+                System.out.print("#");
+            }
+
+            System.out.println("  Done.");
+            dataOutputStream.close();
+            fileInputStream.close();
+            return 0;
+        }
+
+        protected int _put(String[] request) {
+
+            return 0;
+        }
+
+        protected int _cd(String[] request) throws IOException {
+            // Check arguments.
+            if (request.length > 2) {
+                writeResponse(new Response(
                         ReturnCode.ARGUMENT_ERR,
                         "Too many arguments\n"
-                );
+                ));
+                return 1;
+            }
 
             if (request.length == 1) {
                 // Print pwd
-                return new Response(
+                writeResponse(new Response(
                         ReturnCode.DIR_STATUS,
                         String.valueOf(pwd)
-                );
+                ));
 
             } else {
                 // Resolve target path.
-                File targetPath = pwd.toPath().resolve(request[1]).toFile().getCanonicalFile();
+                File targetPath = pwd.toPath().resolve(request[1]).toFile();
 
                 if (!targetPath.exists()) {
                     // Target doesn't exist.
-                    return new Response(
+                    writeResponse(new Response(
                             ReturnCode.FILE_UNAVAILABLE,
                             "Directory doesn't exist"
-                    );
+                    ));
+                    return 1;
+
                 } else if (!targetPath.isDirectory()) {
                     // Target is not a directory.
-                    return new Response(
+                    writeResponse(new Response(
                             ReturnCode.FILE_UNAVAILABLE,
                             "Not a directory"
-                    );
+                    ));
+                    return 1;
                 }
 
-                pwd = targetPath;
-                return new Response(
+                pwd = targetPath.getCanonicalFile();
+                writeResponse(new Response(
                         ReturnCode.SUCCESS,
                         "Moved to " + pwd
-                );
+                ));
             }
+            return 0;
         }
 
-        protected Response _quit(String[] request) throws ClientDownException {
-            throw new ClientDownException();
+        protected int _quit(String[] request) throws ConnectionDownException {
+            throw new ConnectionDownException();
         }
 
     }
@@ -230,11 +299,12 @@ public class Server {
     }
 
     public void start(int cmdPort, int dataPort) throws IOException {
-        ServerSocket serverSocket = new ServerSocket(cmdPort);
+        ServerSocket serverCmdSocket = new ServerSocket(cmdPort);
+        ServerSocket serverDataSocket = new ServerSocket(dataPort);
         while (true) {
-            Socket cmdSocket = serverSocket.accept();
+            Socket cmdSocket = serverCmdSocket.accept();
             ClientManager manager = new ClientManager();
-            manager.start(cmdSocket, dataPort);
+            manager.start(cmdSocket, serverDataSocket);
         }
     }
 
