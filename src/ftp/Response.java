@@ -6,7 +6,7 @@ import java.util.Map;
 public class Response {
 
     /**
-     * Response format:
+     * Response message format:
      * returnCode message\n
      * message\n
      * message\n
