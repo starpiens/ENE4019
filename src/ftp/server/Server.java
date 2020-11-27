@@ -17,7 +17,7 @@ import static java.lang.System.exit;
 
 
 /**
- * This class provides FTP server functionalities,
+ * Provides FTP server functionalities,
  * such as opening up new connection and executing some file-related commands from remote clients.
  * Indeed, it is not yet implemented via multi-thread, so it cannot serve multiple clients in parallel.
  */
@@ -29,13 +29,13 @@ public class Server {
      */
     protected class ClientManager {
 
-        /** Networking */
+        /* Networking */
         protected Socket cmdSocket;
         protected BufferedReader cmdReader;
         protected DataOutputStream cmdOutStream;
         protected ServerSocket serverDataSocket;
 
-        /** Client status */
+        /* Client status */
         protected File pwd = defaultPath;
 
         /**
@@ -45,39 +45,43 @@ public class Server {
          *          Opened socket for command channel.
          * @param   serverDataSocket
          *          Opened server socket for data channel.
+         *
+         * @throws  IOException
+         *          If IO exception occurred while initiating connection with client.
          */
-        public void start(Socket cmdSocket, ServerSocket serverDataSocket) {
+        public void start(Socket cmdSocket, ServerSocket serverDataSocket) throws IOException {
             this.cmdSocket = cmdSocket;
             this.serverDataSocket = serverDataSocket;
+            // Open IO stream.
+            cmdReader = new BufferedReader(new InputStreamReader(cmdSocket.getInputStream()));
+            cmdOutStream = new DataOutputStream(cmdSocket.getOutputStream());
+
             try {
-                // Open up IO stream.
-                cmdReader = new BufferedReader(new InputStreamReader(cmdSocket.getInputStream()));
-                cmdOutStream = new DataOutputStream(cmdSocket.getOutputStream());
                 System.err.println("Connection established: " + cmdSocket.getInetAddress());
                 // Say hello!
                 writeResponse(new Response(ReturnCode.SERVICE_READY, "Hello\n"));
 
-                int processRequestReturnCode;
+                int handleRequestReturnCode;
                 do {
                     // Get request, and process it.
                     String[] request = getRequest();
-                    processRequestReturnCode = handleRequest(request);
-                } while (processRequestReturnCode != -1);
+                    handleRequestReturnCode = handleRequest(request);
+                } while (handleRequestReturnCode != -1);
 
                 // Connection closed normally.
-                System.err.println("Connection with " + cmdSocket.getInetAddress() + " closed.");
+                System.err.println("Connection successfully closed: " + cmdSocket.getInetAddress());
 
             } catch (IOException e) {
-                // Connection closed because of IOException.
-                System.err.println("Connection with " + cmdSocket.getInetAddress()
-                        + " closed, because IO problem occurred.");
+                // Connection accidentally closed because of IOException.
+                System.err.println("Connection accidentally closed: " + cmdSocket.getInetAddress());
                 System.err.println("Details: " + e.getMessage());
 
             } finally {
                 // Cleanup connection.
                 try {
-                    cmdReader.close();
+                    writeResponse(new Response(ReturnCode.SERVICE_CLOSING, "Closing service"));
                     cmdOutStream.close();
+                    cmdReader.close();
                     cmdSocket.close();
                 } catch (IOException ignored) {
                 }
@@ -85,34 +89,35 @@ public class Server {
         }
 
         /**
-         * Get request from a client.
+         * Get request from a client, and split it by space as delimiter. Any leading or trailing
+         * spaces are removed. Also prints request to standard output.
          *
-         * @return  Array of string of request which is split by space as delimiter.
+         * @return  Array of strings.
          *          Name of a command is stored at index 0, and other arguments follow.
          *
          * @throws  IOException
-         *          IO exception occurred.
+         *          If failed reading request from client.
          */
         protected String[] getRequest() throws IOException {
             String str = cmdReader.readLine();
-            if (str == null) throw new IOException();
+            if (str == null) throw new IOException("It seems client is down");
             System.out.println("Request: " + str);
             return str.trim().split("[ ]+");
         }
 
         /**
-         * Write response to a client.
+         * Serialize response, and write it to a client.
+         * Also prints first line of response to standard output.
          *
          * @param   response
          *          Response to write.
          *
          * @throws  IOException
-         *          IO exception occurred.
+         *          If IO exception occurred.
          */
         protected void writeResponse(Response response) throws IOException {
             String responseStr = response.toString();
             cmdOutStream.writeBytes(responseStr);
-            // Print only first line
             System.out.println("Response: " + responseStr.substring(0, responseStr.indexOf('\n')));
         }
 
@@ -124,13 +129,13 @@ public class Server {
          * @param   request
          *          Request to be handled.
          *
-         * @return  0 if request is normally handled, and -1 if client wants to quit.
+         * @return  0 if request is successfully handled, and -1 if client wants to quit.
          *
          * @throws  IOException
          *          If an IO exception occurred while writing the response.
          */
         protected int handleRequest(String[] request) throws IOException {
-            // Is the request is quit?
+            // Quit request?
             if (request[0].equalsIgnoreCase("quit")) {
                 return -1;
             }
@@ -145,7 +150,7 @@ public class Server {
             }
 
             try {
-                // Call method
+                // Call handler
                 handler.invoke(this, (Object) request);
 
             } catch (IllegalAccessException e) {    // This exception must not be thrown. Server goes down.
@@ -240,7 +245,7 @@ public class Server {
         /**
          * Handler for {@code GET} command.
          * Send requested file to client via data channel.
-         * Supports relative path on {@code pwd}.
+         * Supports paths relative to {@code pwd}.
          *
          * @param   request
          *          Name of file(s) starting at index 1.
@@ -248,7 +253,7 @@ public class Server {
          * @return  0 in case of success, non-zero value in case of failure.
          *
          * @throws  IOException
-         *          If an IO exception occurred while writing the response.
+         *          If an IO exception occurred.
          */
         protected int _get(String[] request) throws IOException {
             // Check arguments.
@@ -382,7 +387,7 @@ public class Server {
          * @return  0 in case of success, non-zero value in case of failure.
          *
          * @throws  IOException
-         *          If an IO exception occurred while writing the response.
+         *          If an IO exception occurred.
          */
         protected int _cd(String[] request) throws IOException {
             // Check arguments.
@@ -435,10 +440,15 @@ public class Server {
 
 
     // Default path for new users.
-    protected File defaultPath;
+    protected final File defaultPath;
 
     // Maps request string to request handler.
     protected final Map<String, Method> requestHandlers;
+
+    /* SR Parameters */
+    protected final int maxSeqNo = 15;
+    protected final int winSize = 5;
+    protected final int senderTimeOut = 1;
 
 
     /**
@@ -455,8 +465,11 @@ public class Server {
             requestHandlers.put("get", ClientManager.class.getDeclaredMethod("_get", String[].class));
             requestHandlers.put("put", ClientManager.class.getDeclaredMethod("_put", String[].class));
             requestHandlers.put("cd", ClientManager.class.getDeclaredMethod("_cd", String[].class));
+
         } catch (NoSuchMethodException e) {
+            // This exception must not be thrown. Server goes down.
             e.printStackTrace();
+            exit(1);
         }
     }
 
