@@ -6,16 +6,21 @@ import ftp.Response;
 import ftp.ReturnCode;
 
 import java.io.*;
-import java.net.ConnectException;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.net.Socket;
+import java.util.HashMap;
+import java.util.Map;
 
+import static java.lang.System.exit;
+
+
+/**
+ * Provides FTP client functionalities.
+ */
 public class Client {
 
-    protected class ConnectionTerminatedException extends Exception {
-    }
-
-
-    // Networking
+    /* Networking */
     protected String host;
     protected int dataPort;
     protected Socket cmdSocket;
@@ -23,39 +28,101 @@ public class Client {
     protected BufferedReader cmdReader;
     protected DataOutputStream ctrlOutStream;
 
+    /* SR Parameters */
+    protected final int maxSeqNo = 15;
+    protected final int winSize = 5;
+    protected final int senderTimeOut = 1;
 
+    // Maps request string to request handler.
+    protected final Map<String, Method> requestHandlers;
+
+
+    /**
+     * Create new client.
+     */
+    public Client() {
+        requestHandlers = new HashMap<>();
+        try {
+            requestHandlers.put("get", Client.class.getDeclaredMethod("_get", String[].class));
+            requestHandlers.put("put", Client.class.getDeclaredMethod("_put", String[].class));
+
+        } catch (NoSuchMethodException e) {
+            // This exception must not be thrown. Server goes down.
+            e.printStackTrace();
+            exit(1);
+        }
+    }
+
+    /**
+     * Start connection with server.
+     *
+     * @param   host
+     *          Host name, or {@code null} for the loopback address.
+     * @param   cmdPort
+     *          Port number of command channel.
+     * @param   dataPort
+     *          Port number of data channel.
+     *
+     * @throws  IOException
+     *          If IO exception occurred while initiating connection with server.
+     */
     public void start(String host, int cmdPort, int dataPort) throws IOException {
         this.host = host;
         this.dataPort = dataPort;
+        // Open IO stream.
         cmdSocket = new Socket(host, cmdPort);
         stdReader = new BufferedReader(new InputStreamReader(System.in));
         cmdReader = new BufferedReader(new InputStreamReader(cmdSocket.getInputStream()));
         ctrlOutStream = new DataOutputStream(cmdSocket.getOutputStream());
 
         try {
-            Response response = getResponse();
-            while (!response.returnCode.equals(ReturnCode.SERVICE_CLOSING)) {
-                String request = readStd();
-                if (isGET(request)) {
-                    _get(request);
-                } else if (isPUT(request)) {
-                    _put(request);
-                } else {
-                    writeRequest(request);
-                    response = getResponse();
-                }
+            System.err.println("Connection established: " + cmdSocket.getInetAddress());
+            // Hello!
+            readResponse();
+
+            int handleRequestReturnCode;
+            do {
+                // Get request, and process it.
+                String[] request = readRequest();
+                handleRequestReturnCode = handleRequest(request);
+            } while (handleRequestReturnCode != -1);
+
+            // Connection closed normally.
+            System.err.println("Connection successfully closed: " + cmdSocket.getInetAddress());
+
+        } catch (IOException e) {
+            // Connection accidentally closed because of IOException.
+            System.err.println("Connection accidentally closed: " + cmdSocket.getInetAddress());
+            System.err.println("Details: " + e.getMessage());
+
+        } finally {
+            // Cleanup connection.
+            try {
+                handleRequest(new String[]{"quit"});
+                stdReader.close();
+                cmdReader.close();
+                ctrlOutStream.close();
+                cmdSocket.close();
+            } catch (IOException ignored) {
             }
-        } catch (IOException | ConnectionTerminatedException e) {
-            System.out.println("Connection Terminated.");
         }
     }
 
-    protected Response getResponse() throws IOException, ConnectionTerminatedException {
+    /**
+     * Get response from server. Reads serialized string from {@code cmdReader},
+     * and deserialize as {@code Response} instance.
+     *
+     * @return  Response from server.
+     *
+     * @throws  IOException
+     *          If failed reading response from server.
+     */
+    protected Response readResponse() throws IOException {
         StringBuilder responseStr = new StringBuilder();
         String responseStrLine;
         while (true) {
             responseStrLine = cmdReader.readLine();
-            if (responseStrLine == null) throw new ConnectionTerminatedException();
+            if (responseStrLine == null) throw new IOException("It seems server is down");
             if (responseStrLine.isEmpty()) break;
             responseStr.append(responseStrLine).append('\n');
         }
@@ -64,26 +131,109 @@ public class Client {
         return response;
     }
 
-    protected void writeRequest(String request) throws IOException {
-        ctrlOutStream.writeBytes(request + '\n');
+    /**
+     * Write a single-line request to the server. Guarantees that the request message
+     * to the server is always single-line.
+     *
+     * @param   request
+     *          A single line request message. If it has multiple lines of request,
+     *          all lines are not being sent but first line.
+     *
+     * @throws  IOException
+     *          If failed to write request to server.
+     */
+    protected void writeRequest(String[] request) throws IOException {
+        for (String req : request) {
+            int i = req.indexOf('\n');
+            if (i != -1) {
+                req = req.substring(0, i);
+                ctrlOutStream.writeBytes(req);
+                break;
+            } else {
+                ctrlOutStream.writeBytes(req + ' ');
+            }
+        }
+        ctrlOutStream.write('\n');
     }
 
-    protected String readStd() throws IOException {
+    /**
+     * Read request from standard input, and split it by space as delimiter.
+     * Any leading or trailing spaces are removed.
+     *
+     * @return  Array of strings.
+     *          Name of a command is stored at index 0, and other arguments follow.
+     *
+     * @throws  IOException
+     *          If failed reading request from standard input.
+     */
+    protected String[] readRequest() throws IOException {
         System.out.print("> ");
-        return stdReader.readLine();
+        String str = stdReader.readLine();
+        if (str == null) throw new IOException("Failed reading request from stdin");
+        return str.trim().split("[ ]+");
     }
 
-    protected boolean isGET(String request) {
-        String[] requestSplit = request.trim().split("[ ]+");
-        return (requestSplit[0].equalsIgnoreCase("get"));
+    /**
+     * Handles a request from user. That includes writing request to server, and reading response
+     * from client. For more complex requests, appropriate handler in {@code requestHandlers}
+     * is being handed over for handling.
+     *
+     * @param   request
+     *          Request to be handled.
+     * @return  0 if request is successfully handled, and -1 if client wants to quit.
+     *
+     * @throws  IOException
+     *          If an IO exception occurred while writing the request or reading the response.
+     */
+    protected int handleRequest(String[] request) throws IOException {
+        // Find method
+        Method handler = requestHandlers.get(request[0].toLowerCase());
+
+        if (handler == null) {
+            // No specific handler for such command. Just send it to server.
+            writeRequest(request);
+            readResponse();
+            return 0;
+        }
+
+        try {
+            // Call handler
+            handler.invoke(this, (Object) request);
+
+        } catch (IllegalAccessException e) {        // This exception must not be thrown. Client goes down.
+            e.printStackTrace();
+            exit(1);
+
+        } catch (InvocationTargetException e) {     // Callee has thrown an exception.
+            if (e.getCause().getClass().equals(IOException.class)) {    // Is it because of IOException?
+                throw (IOException) e.getCause();
+            } else {                                                    // .. or something else happened?
+                e.printStackTrace();                                    // If so, client goes down.
+                exit(1);
+            }
+        }
+
+        return 0;
     }
 
-    protected int _get(String request) throws IOException, ConnectionTerminatedException {
+    /**
+     * Handler for {@code GET} command. Receive requested file from server via data channel,
+     * and save it to the path where client is running at. If name of file collides, TODO !!!!
+     *
+     * @param   request
+     *          Name of file(s) starting at index 1.
+     *          Supports paths relative to current path on server.
+     *
+     * @return  0 in case of success, non-zero value in case of failure.
+     *
+     * @throws  IOException
+     *          If an IO exception occurred.
+     */
+    protected int _get(String[] request) throws IOException {
         writeRequest(request);
-        String[] requestSplit = request.trim().split("[ ]+");
 
         // Check for response.
-        Response response = getResponse();
+        Response response = readResponse();
         if (response.returnCode != ReturnCode.SUCCESS) {
             return 1;
         }
@@ -92,7 +242,7 @@ public class Client {
         int targetLength = Integer.parseInt(
                 response.message.trim().split("[ ]+")[1]
         );
-        File srcFile = new File(requestSplit[1]);
+        File srcFile = new File(request[1]);
         File dstFile = new File(srcFile.getName());
 
         // Setup IO streams.
@@ -115,15 +265,9 @@ public class Client {
         return 0;
     }
 
-    protected boolean isPUT(String request) {
-        String[] requestSplit = request.trim().split("[ ]+");
-        return (requestSplit[0].equalsIgnoreCase("put"));
-    }
-
-    protected int _put(String request) throws IOException, ConnectionTerminatedException {
-        String[] requestSplit = request.trim().split("[ ]+");
+    protected int _put(String[] request) throws IOException {
         // Check for file.
-        File file = new File(requestSplit[1]);
+        File file = new File(request[1]);
         if (!file.exists()) {
             return 1;
         }
@@ -131,11 +275,13 @@ public class Client {
         writeRequest(request);
 
         // Check for response, send target length.
-        Response response = getResponse();
+        Response response = readResponse();
         if (response.returnCode != ReturnCode.SUCCESS) {
             return 1;
         }
-        writeRequest(String.valueOf(file.length()));
+        writeRequest(new String[]{
+                String.valueOf(file.length())
+        });
 
         // Setup IO streams.
         Socket dataSocket = new Socket(host, dataPort);
@@ -157,4 +303,5 @@ public class Client {
         fileInputStream.close();
         return 0;
     }
+
 }
