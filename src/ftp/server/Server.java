@@ -182,7 +182,7 @@ public class Server {
          * @throws  IOException
          *          If an IO exception occurred while writing the response.
          */
-        protected int _list(String[] request) throws IOException {
+        protected int handleLIST(String[] request) throws IOException {
             // Check arguments.
             if (request.length != 2) {
                 writeResponse(new Response(
@@ -255,7 +255,7 @@ public class Server {
          * @throws  IOException
          *          If an IO exception occurred.
          */
-        protected int _get(String[] request) throws IOException {
+        protected int handleGET(String[] request) throws IOException {
             // Check arguments.
             if (request.length != 2) {
                 writeResponse(new Response(
@@ -326,7 +326,7 @@ public class Server {
          * @throws  IOException
          *          If an IO exception occurred while writing the response.
          */
-        protected int _put(String[] request) throws IOException {
+        protected int handlePUT(String[] request) throws IOException {
             // Check arguments.
             if (request.length != 2) {
                 writeResponse(new Response(
@@ -355,6 +355,7 @@ public class Server {
                     "Ready to receive"
             ));
             int targetLength = Integer.parseInt(getRequest()[0]);
+            int numChunk = (targetLength + DataChunkC2S.maxChunkSize - 1) / DataChunkC2S.maxChunkSize;
 
             // Setup IO streams.
             Socket dataSocket = serverDataSocket.accept();
@@ -362,7 +363,7 @@ public class Server {
             FileOutputStream fileOutputStream = new FileOutputStream(targetFile);
 
             // Start receiving.
-            for (byte seqNo = 0; seqNo * DataChunkC2S.maxDataSize < targetLength; seqNo++) {
+            for (byte seqNo = 0; seqNo < numChunk; seqNo++) {
                 byte[] bytes = dataInputStream.readNBytes(DataChunkC2S.maxChunkSize);
                 System.out.print("#");
                 DataChunkC2S chunk = new DataChunkC2S(bytes);
@@ -389,7 +390,7 @@ public class Server {
          * @throws  IOException
          *          If an IO exception occurred.
          */
-        protected int _cd(String[] request) throws IOException {
+        protected int handleCD(String[] request) throws IOException {
             // Check arguments.
             if (request.length > 2) {
                 writeResponse(new Response(
@@ -461,10 +462,10 @@ public class Server {
         defaultPath = new File(path);
         requestHandlers = new HashMap<>();
         try {
-            requestHandlers.put("list", ClientManager.class.getDeclaredMethod("_list", String[].class));
-            requestHandlers.put("get", ClientManager.class.getDeclaredMethod("_get", String[].class));
-            requestHandlers.put("put", ClientManager.class.getDeclaredMethod("_put", String[].class));
-            requestHandlers.put("cd", ClientManager.class.getDeclaredMethod("_cd", String[].class));
+            requestHandlers.put("list", ClientManager.class.getDeclaredMethod("handleLIST", String[].class));
+            requestHandlers.put("get", ClientManager.class.getDeclaredMethod("handleGET", String[].class));
+            requestHandlers.put("put", ClientManager.class.getDeclaredMethod("handlePUT", String[].class));
+            requestHandlers.put("cd", ClientManager.class.getDeclaredMethod("handleCD", String[].class));
 
         } catch (NoSuchMethodException e) {
             // This exception must not be thrown. Server goes down.

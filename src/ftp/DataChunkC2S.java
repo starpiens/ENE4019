@@ -18,13 +18,12 @@ public class DataChunkC2S {
 
     public DataChunkC2S(
             byte seqNo,
-            short size,
             byte[] data
     ) {
         this.seqNo = seqNo;
-        this.chkSum = 0x0000;
-        this.size = size;
+        this.size = (short) data.length;
         this.data = data;
+        this.chkSum = 0x0000;
     }
 
     public DataChunkC2S(byte[] bytes) {
@@ -46,5 +45,7 @@ public class DataChunkC2S {
     public boolean isError() {
         return chkSum != 0x0000;
     }
+
+    public byte getSeqNo() { return seqNo; }
 
 }

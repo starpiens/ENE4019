@@ -1,16 +1,13 @@
 package ftp.client;
 
-import ftp.DataChunkC2S;
-import ftp.DataChunkS2C;
-import ftp.Response;
-import ftp.ReturnCode;
+import ftp.*;
 
+import javax.xml.crypto.Data;
 import java.io.*;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.net.Socket;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 
 import static java.lang.System.exit;
 
@@ -29,7 +26,7 @@ public class Client {
     protected DataOutputStream ctrlOutStream;
 
     /* SR Parameters */
-    protected final int maxSeqNo = 15;
+    protected final byte maxSeqNo = 15;
     protected final int winSize = 5;
     protected final int senderTimeOut = 1;
 
@@ -43,8 +40,8 @@ public class Client {
     public Client() {
         requestHandlers = new HashMap<>();
         try {
-            requestHandlers.put("get", Client.class.getDeclaredMethod("_get", String[].class));
-            requestHandlers.put("put", Client.class.getDeclaredMethod("_put", String[].class));
+            requestHandlers.put("get", Client.class.getDeclaredMethod("handleGET", String[].class));
+            requestHandlers.put("put", Client.class.getDeclaredMethod("handlePUT", String[].class));
 
         } catch (NoSuchMethodException e) {
             // This exception must not be thrown. Server goes down.
@@ -56,15 +53,10 @@ public class Client {
     /**
      * Start connection with server.
      *
-     * @param   host
-     *          Host name, or {@code null} for the loopback address.
-     * @param   cmdPort
-     *          Port number of command channel.
-     * @param   dataPort
-     *          Port number of data channel.
-     *
-     * @throws  IOException
-     *          If IO exception occurred while initiating connection with server.
+     * @param host     Host name, or {@code null} for the loopback address.
+     * @param cmdPort  Port number of command channel.
+     * @param dataPort Port number of data channel.
+     * @throws IOException If IO exception occurred while initiating connection with server.
      */
     public void start(String host, int cmdPort, int dataPort) throws IOException {
         this.host = host;
@@ -112,10 +104,8 @@ public class Client {
      * Get response from server. Reads serialized string from {@code cmdReader},
      * and deserialize as {@code Response} instance.
      *
-     * @return  Response from server.
-     *
-     * @throws  IOException
-     *          If failed reading response from server.
+     * @return Response from server.
+     * @throws IOException If failed reading response from server.
      */
     protected Response readResponse() throws IOException {
         StringBuilder responseStr = new StringBuilder();
@@ -135,12 +125,9 @@ public class Client {
      * Write a single-line request to the server. Guarantees that the request message
      * to the server is always single-line.
      *
-     * @param   request
-     *          A single line request message. If it has multiple lines of request,
-     *          all lines are not being sent but first line.
-     *
-     * @throws  IOException
-     *          If failed to write request to server.
+     * @param request A single line request message. If it has multiple lines of request,
+     *                all lines are not being sent but first line.
+     * @throws IOException If failed to write request to server.
      */
     protected void writeRequest(String[] request) throws IOException {
         for (String req : request) {
@@ -160,11 +147,9 @@ public class Client {
      * Read request from standard input, and split it by space as delimiter.
      * Any leading or trailing spaces are removed.
      *
-     * @return  Array of strings.
-     *          Name of a command is stored at index 0, and other arguments follow.
-     *
-     * @throws  IOException
-     *          If failed reading request from standard input.
+     * @return Array of strings.
+     * Name of a command is stored at index 0, and other arguments follow.
+     * @throws IOException If failed reading request from standard input.
      */
     protected String[] readRequest() throws IOException {
         System.out.print("> ");
@@ -178,12 +163,9 @@ public class Client {
      * from client. For more complex requests, appropriate handler in {@code requestHandlers}
      * is being handed over for handling.
      *
-     * @param   request
-     *          Request to be handled.
-     * @return  0 if request is successfully handled, and -1 if client wants to quit.
-     *
-     * @throws  IOException
-     *          If an IO exception occurred while writing the request or reading the response.
+     * @param request Request to be handled.
+     * @return 0 if request is successfully handled, and -1 if client wants to quit.
+     * @throws IOException If an IO exception occurred while writing the request or reading the response.
      */
     protected int handleRequest(String[] request) throws IOException {
         // Find method
@@ -220,16 +202,12 @@ public class Client {
      * Handler for {@code GET} command. Receive requested file from server via data channel,
      * and save it to the path where client is running at. If name of file collides, TODO !!!!
      *
-     * @param   request
-     *          Name of file(s) starting at index 1.
-     *          Supports paths relative to current path on server.
-     *
-     * @return  0 in case of success, non-zero value in case of failure.
-     *
-     * @throws  IOException
-     *          If an IO exception occurred.
+     * @param request Name of file(s) starting at index 1.
+     *                Supports paths relative to current path on server.
+     * @return 0 in case of success, non-zero value in case of failure.
+     * @throws IOException If an IO exception occurred.
      */
-    protected int _get(String[] request) throws IOException {
+    protected int handleGET(String[] request) throws IOException {
         writeRequest(request);
 
         // Check for response.
@@ -265,42 +243,91 @@ public class Client {
         return 0;
     }
 
-    protected int _put(String[] request) throws IOException {
-        // Check for file.
+    /**
+     * Handler for {@code PUT} command. Send requested file to server via data channel,
+     * and save it to the current path on the server.
+     *
+     * @param request Name of file(s) starting at index 1.
+     *                Supports paths relative to where client is running at.
+     * @return 0 in case of success, non-zero value in case of failure.
+     * @throws IOException If an IO exception occurred.
+     */
+    protected int handlePUT(String[] request) throws IOException {
         File file = new File(request[1]);
-        if (!file.exists()) {
+        if (!file.isFile()) {
             return 1;
         }
 
-        writeRequest(request);
-
-        // Check for response, send target length.
+        writeRequest(request);                      // PUT request & response
         Response response = readResponse();
         if (response.returnCode != ReturnCode.SUCCESS) {
             return 1;
         }
-        writeRequest(new String[]{
+        writeRequest(new String[]{                  // Write metadata for sending file.
                 String.valueOf(file.length())
         });
 
-        // Setup IO streams.
+        // Preparation
         Socket dataSocket = new Socket(host, dataPort);
+        BufferedReader dataInputStream = new BufferedReader(new InputStreamReader(dataSocket.getInputStream()));
         DataOutputStream dataOutputStream = new DataOutputStream(dataSocket.getOutputStream());
         FileInputStream fileInputStream = new FileInputStream(file);
+        DataChunkC2S[] window = new DataChunkC2S[winSize];  // Stores data chunk
+        Timer[] timers = new Timer[winSize];                // Each timer periodically sends data chunk
+        for (Timer timer : timers) timer = new Timer();     // stored in the window until being disabled.
+        int numChunk = (int) (file.length() + DataChunkC2S.maxChunkSize - 1)
+                / DataChunkC2S.maxChunkSize;                // Total number of chunks to be sent.
+        int winBase = 0;                                    // Index of firstly sent chunk in the window.
+        int numSent = 0;                                    // Number of chunks sent in the window.
+        byte nextSeqNo = 0;                                 // Next sequence number, in range of [0, maxSeqNo].
+        ThreadIOException ioEX = new ThreadIOException();   // Set message if a thread throws IOException.
 
-        // Start sending.
-        for (byte seqNo = 0; ; seqNo++) {
-            byte[] data = fileInputStream.readNBytes(DataChunkC2S.maxDataSize);
-            if (data.length == 0) break;
-            DataChunkC2S chunk = new DataChunkC2S(seqNo, (short)data.length, data);
-            chunk.writeBytes(dataOutputStream);
-            System.out.print("#");
+        // Send file.
+        while (numSent < numChunk) {
+            // Fill window.
+            while (numSent < winSize) {
+                int idx = (winBase + numSent) % winSize;
+                byte[] data = fileInputStream.readNBytes(DataChunkC2S.maxChunkSize);
+                window[idx] = new DataChunkC2S(nextSeqNo, data);    // Create data chunk.
+                timers[idx].scheduleAtFixedRate(                    // Setup timer and start it.
+                        new TimerTask() {
+                            @Override
+                            public void run() {
+                                try {
+                                    window[idx].writeBytes(dataOutputStream);
+                                    ioEX.message = "TEST";                  // TODO: Remove it
+                                } catch (IOException e) {
+                                    ioEX.message = e.getMessage();
+                                }
+                            }
+                        },
+                        0,
+                        senderTimeOut * 1000
+                );
+                numSent++;
+                nextSeqNo = (byte) ((nextSeqNo + 1) % (maxSeqNo + 1));
+            }
+
+            if (ioEX.message != null) {                // Check for exception thrown in thread.
+                throw new IOException(ioEX.message);
+            }
+
+            // Get ACK. TODO: Make separate thread to check ACK message.
+            int ACKed = Integer.parseInt(dataInputStream.readLine());
+            if (ACKed < window[winBase].getSeqNo())
+                ACKed += maxSeqNo + 1;
+            ACKed -= window[winBase].getSeqNo();
+            window[ACKed] = null;
+            timers[ACKed].cancel();
+            while (window[winBase] == null) {
+                // Slide window.
+                winBase = (winBase + 1) % winSize;
+            }
         }
 
         System.out.println("  Done.");
         dataSocket.close();
         dataOutputStream.close();
-        fileInputStream.close();
         return 0;
     }
 
