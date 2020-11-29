@@ -272,21 +272,22 @@ public class Client {
         BufferedReader dataInputStream = new BufferedReader(new InputStreamReader(dataSocket.getInputStream()));
         DataOutputStream dataOutputStream = new DataOutputStream(dataSocket.getOutputStream());
         FileInputStream fileInputStream = new FileInputStream(file);
-        DataChunkC2S[] window = new DataChunkC2S[winSize];  // Stores data chunk
-        Timer[] timers = new Timer[winSize];                // Each timer periodically sends data chunk
-        for (Timer timer : timers) timer = new Timer();     // stored in the window until being disabled.
-        int numChunk = (int) (file.length() + DataChunkC2S.maxChunkSize - 1)
-                / DataChunkC2S.maxChunkSize;                // Total number of chunks to be sent.
+        DataChunkC2S[] window = new DataChunkC2S[winSize];  // Stores data chunk.
+        Timer[] timers = new Timer[winSize];                // Each timer periodically sends data chunk,
+        for (int i = 0; i < timers.length; i++)             // stored in the window until being disabled.
+            timers[i] = new Timer();
+        int remainingChunks = (int) (file.length() + DataChunkC2S.maxChunkSize - 1)
+                / DataChunkC2S.maxChunkSize;                // Number of chunks, not yet ACKed.
         int winBase = 0;                                    // Index of firstly sent chunk in the window.
-        int numSent = 0;                                    // Number of chunks sent in the window.
+        int numBuffered = 0;                                // Number of buffered chunks in the window.
         byte nextSeqNo = 0;                                 // Next sequence number, in range of [0, maxSeqNo].
         ThreadIOException ioEX = new ThreadIOException();   // Set message if a thread throws IOException.
 
         // Send file.
-        while (numSent < numChunk) {
-            // Fill window.
-            while (numSent < winSize) {
-                int idx = (winBase + numSent) % winSize;
+        while (remainingChunks > 0) {
+            // Make chunk, and fill window.
+            while (numBuffered < winSize && numBuffered < remainingChunks) {
+                int idx = (winBase + numBuffered) % winSize;
                 byte[] data = fileInputStream.readNBytes(DataChunkC2S.maxChunkSize);
                 window[idx] = new DataChunkC2S(nextSeqNo, data);    // Create data chunk.
                 timers[idx].scheduleAtFixedRate(                    // Setup timer and start it.
@@ -304,25 +305,32 @@ public class Client {
                         0,
                         senderTimeOut * 1000
                 );
-                numSent++;
+                numBuffered++;
                 nextSeqNo = (byte) ((nextSeqNo + 1) % (maxSeqNo + 1));
             }
 
-            if (ioEX.message != null) {                // Check for exception thrown in thread.
+            if (ioEX.message != null) {                // Check for exception has thrown in thread.
                 throw new IOException(ioEX.message);
             }
 
             // Get ACK. TODO: Make separate thread to check ACK message.
             int ACKed = Integer.parseInt(dataInputStream.readLine());
-            if (ACKed < window[winBase].getSeqNo())
-                ACKed += maxSeqNo + 1;
-            ACKed -= window[winBase].getSeqNo();
-            window[ACKed] = null;
-            timers[ACKed].cancel();
-            while (window[winBase] == null) {
-                // Slide window.
-                winBase = (winBase + 1) % winSize;
+            int firstSeqNo = (nextSeqNo - numBuffered + maxSeqNo + 1) % (maxSeqNo + 1);
+            int logicalNextSeqNo = nextSeqNo + ((nextSeqNo < firstSeqNo) ? (maxSeqNo + 1) : 0);
+            int logicalACKed = ACKed + ((ACKed < firstSeqNo) ? (maxSeqNo + 1) : 0);
+            if (firstSeqNo <= logicalACKed && logicalACKed < logicalNextSeqNo) {
+                // ACKed sequence number is in range.
+                int idx = (winBase + logicalACKed - firstSeqNo) % winSize;
+                window[idx] = null;
+                timers[idx].cancel();
+                while (window[winBase] == null && numBuffered > 0) {
+                    // Slide window.
+                    winBase = (winBase + 1) % winSize;
+                    numBuffered--;
+                    remainingChunks--;
+                }
             }
+
         }
 
         System.out.println("  Done.");
