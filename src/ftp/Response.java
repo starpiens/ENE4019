@@ -16,7 +16,7 @@ public class Response {
     public ReturnCode returnCode;
     public String message;
 
-    protected static Map<Integer, ReturnCode> int2code = new HashMap<>();
+    protected static final Map<Integer, ReturnCode> int2code = new HashMap<>();
 
 
     public Response(ReturnCode returnCode) {

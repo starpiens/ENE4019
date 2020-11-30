@@ -11,15 +11,15 @@ public class DataChunkC2S {
 
     public static final int headerSize = 5;
     public static final int maxDataSize = 1000;
-    public static final int maxChunkSize = maxDataSize + headerSize;
 
     /* SR parameters */
     public static final int maxSeqNo = 15;
     public static final int winSize = 5;
 
-    protected byte seqNo;       // Sequence number.
-    protected short chkSum;     // Checksum value. It is regarded that bit error has occurred, if the value != 0x0000.
-    protected short size;       // Size of data.
+    /* Header values */
+    protected final byte seqNo;       // Sequence number.
+    protected final short chkSum;     // Checksum value. It is regarded that bit error has occurred, if the value != 0x0000.
+    protected final short size;       // Size of data.
     public byte[] data;
 
     public byte getSeqNo() { return seqNo; }

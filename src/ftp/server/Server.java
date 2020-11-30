@@ -29,8 +29,6 @@ public class Server {
      */
     protected class ClientHandler {
 
-        /* Networking */
-        protected Socket cmdSocket;
         protected BufferedReader cmdReader;
         protected DataOutputStream cmdOutStream;
         protected ServerSocket serverDataSocket;
@@ -50,7 +48,6 @@ public class Server {
          *          If IO exception occurred while initiating connection with client.
          */
         public void start(Socket cmdSocket, ServerSocket serverDataSocket) throws IOException {
-            this.cmdSocket = cmdSocket;
             this.serverDataSocket = serverDataSocket;
             // Open IO stream.
             cmdReader = new BufferedReader(new InputStreamReader(cmdSocket.getInputStream()));
@@ -169,6 +166,28 @@ public class Server {
             return 0;
         }
 
+        protected boolean isDirOK(File targetPath) throws IOException {
+            if (!targetPath.exists()) {
+                // Target doesn't exist.
+                writeResponse(new Response(
+                        ReturnCode.FILE_UNAVAILABLE,
+                        "Directory doesn't exist"
+                ));
+                return false;
+
+            } else if (!targetPath.isDirectory()) {
+                // Target is not a directory.
+                writeResponse(new Response(
+                        ReturnCode.FILE_UNAVAILABLE,
+                        "Not a directory"
+                ));
+                return false;
+
+            } else {
+                return true;
+            }
+        }
+
         /**
          * Handler for {@code LIST} command.
          * Get list of files in requested directory and response it to the requester.
@@ -194,21 +213,7 @@ public class Server {
 
             // Resolve target path.
             File targetPath = pwd.toPath().resolve(request[1]).toFile();
-
-            if (!targetPath.exists()) {
-                // Target doesn't exist.
-                writeResponse(new Response(
-                        ReturnCode.FILE_UNAVAILABLE,
-                        "Directory doesn't exist"
-                ));
-                return 1;
-
-            } else if (!targetPath.isDirectory()) {
-                // Target is not a directory.
-                writeResponse(new Response(
-                        ReturnCode.FILE_UNAVAILABLE,
-                        "Not a directory"
-                ));
+            if (!isDirOK(targetPath)) {
                 return 1;
             }
 
@@ -440,21 +445,7 @@ public class Server {
             } else {
                 // Resolve target path.
                 File targetPath = pwd.toPath().resolve(request[1]).toFile();
-
-                if (!targetPath.exists()) {
-                    // Target doesn't exist.
-                    writeResponse(new Response(
-                            ReturnCode.FILE_UNAVAILABLE,
-                            "Directory doesn't exist"
-                    ));
-                    return 1;
-
-                } else if (!targetPath.isDirectory()) {
-                    // Target is not a directory.
-                    writeResponse(new Response(
-                            ReturnCode.FILE_UNAVAILABLE,
-                            "Not a directory"
-                    ));
+                if (!isDirOK(targetPath)) {
                     return 1;
                 }
 
@@ -517,6 +508,7 @@ public class Server {
         ServerSocket serverCmdSocket = new ServerSocket(cmdPort);
         ServerSocket serverDataSocket = new ServerSocket(dataPort);
         System.out.println("Running.. ");
+        //noinspection InfiniteLoopStatement
         while (true) {
             Socket cmdSocket = serverCmdSocket.accept();
             ClientHandler manager = new ClientHandler();

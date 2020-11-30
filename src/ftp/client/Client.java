@@ -2,7 +2,6 @@ package ftp.client;
 
 import ftp.*;
 
-import javax.xml.crypto.Data;
 import java.io.*;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -17,18 +16,24 @@ import static java.lang.System.exit;
  */
 public class Client {
 
+    protected static class ThreadExceptionMessage {
+        public String message = null;
+    }
+
+
     /* Networking */
-    protected String host;
-    protected int dataPort;
+    protected String host;                      // Host name, or {@code null} for the loopback address.
+    protected int dataPort;                     //
     protected Socket cmdSocket;
     protected BufferedReader stdReader;
     protected BufferedReader cmdReader;
     protected DataOutputStream ctrlOutStream;
 
-    /* SR Parameters */
-    protected final byte maxSeqNo = 15;
-    protected final int winSize = 5;
+    /* Selective Repeat */
     protected final int senderTimeOut = 1;
+    protected ArrayList<Integer> srDropList;
+    protected ArrayList<Integer> srTimeoutList;
+    protected ArrayList<Integer> srBiterrList;
 
     // Maps request string to request handler.
     protected final Map<String, Method> requestHandlers;
@@ -48,6 +53,9 @@ public class Client {
             e.printStackTrace();
             exit(1);
         }
+
+        srDropList = new ArrayList<>(15);
+
     }
 
     /**
@@ -118,7 +126,7 @@ public class Client {
             responseStr.append(responseStrLine).append('\n');
         }
         Response response = new Response(responseStr.toString());
-        System.out.print(response.message);
+        System.out.print("Server responded: " + response.message);
         return response;
     }
 
@@ -179,9 +187,10 @@ public class Client {
             return 0;
         }
 
+        int returnCode = -1;
         try {
             // Call handler
-            handler.invoke(this, (Object) request);
+            returnCode = (int) handler.invoke(this, (Object) request);
 
         } catch (IllegalAccessException e) {        // This exception must not be thrown. Client goes down.
             e.printStackTrace();
@@ -196,7 +205,7 @@ public class Client {
             }
         }
 
-        return 0;
+        return returnCode;
     }
 
     /**
@@ -266,81 +275,126 @@ public class Client {
             return 1;
         }
         writeRequest(new String[]{                  // Write metadata for sending file.
-                String.valueOf(file.length())
+                String.valueOf(file.length()),
+                " bytes"
         });
+
 
         // Preparation
         Socket dataSocket = new Socket(host, dataPort);
         BufferedReader dataInputStream = new BufferedReader(new InputStreamReader(dataSocket.getInputStream()));
         DataOutputStream dataOutputStream = new DataOutputStream(dataSocket.getOutputStream());
         FileInputStream fileInputStream = new FileInputStream(file);
-        DataChunkC2S[] window = new DataChunkC2S[winSize];  // Stores data chunk.
-        Timer[] timers = new Timer[winSize];                // Each timer periodically sends data chunk,
-        for (int i = 0; i < timers.length; i++)             // stored in the window until being disabled.
-            timers[i] = new Timer();
+        DataChunkC2S[] window = new DataChunkC2S[DataChunkC2S.winSize];  // Stores data chunk.
+        Timer[] timers = new Timer[DataChunkC2S.winSize];                // Each timer periodically retransmit chunks.
         int remainingChunks = (int) (file.length() + DataChunkC2S.maxDataSize - 1)
                 / DataChunkC2S.maxDataSize;                 // Number of chunks, not yet ACKed.
         int winBase = 0;                                    // Index of firstly sent chunk in the window.
         int numBuffered = 0;                                // Number of buffered chunks in the window.
         byte firstSeqNo = 0;                                // First sequence number in the window.
         byte nextSeqNo = 0;                                 // Next sequence number, in range of [0, maxSeqNo].
-        ThreadIOException ioEX = new ThreadIOException();   // Set message if a thread throws IOException.
+        ThreadExceptionMessage ioEX = new ThreadExceptionMessage();   // Set message if a thread throws IOException.
 
-        // Send file.
-        while (remainingChunks > 0) {
-            // Make chunk, and fill window.
-            while (numBuffered < winSize && numBuffered < remainingChunks) {
-                int idx = (winBase + numBuffered) % winSize;
-                byte[] data = fileInputStream.readNBytes(DataChunkC2S.maxDataSize);
-                window[idx] = new DataChunkC2S(nextSeqNo, data);    // Create data chunk.
-                timers[idx].scheduleAtFixedRate(                    // Setup timer and start it.
-                        new TimerTask() {
-                            @Override
-                            public void run() {
-                                try {
-                                    synchronized (dataOutputStream) {
-                                        window[idx].writeBytes(dataOutputStream);
+        try {
+            // Send file.
+            while (remainingChunks > 0) {
+                // Create data chunks, and fill window.
+                Boolean sw = false;
+                while (numBuffered < DataChunkC2S.winSize && numBuffered < remainingChunks) {
+                    if (!sw) {
+                        System.out.print("Transmitted: ");
+                        sw = true;
+                    }
+                    int idx = (winBase + numBuffered) % DataChunkC2S.winSize;
+                    byte[] data = fileInputStream.readNBytes(DataChunkC2S.maxDataSize);
+                    window[idx] = new DataChunkC2S(nextSeqNo, data);    // Create data chunk.
+                    if (nextSeqNo != 2) {       // TODO: For test
+                        synchronized (dataOutputStream) {                   // Send it.
+                            window[idx].writeBytes(dataOutputStream);
+                        }
+                    }
+                    System.out.print(nextSeqNo + " ");
+                    timers[idx] = new Timer();
+                    timers[idx].scheduleAtFixedRate(                    // Setup timer for retransmission, and start it.
+                            new TimerTask() {
+                                @Override
+                                public void run() {
+                                    try {
+                                        synchronized (dataOutputStream) {
+                                            System.out.println(window[idx].getSeqNo() + " timed out, retransmitting");
+                                            window[idx].writeBytes(dataOutputStream);
+                                        }
+                                    } catch (IOException e) {
+                                        ioEX.message = e.getMessage();
                                     }
-                                } catch (IOException e) {
-                                    ioEX.message = e.getMessage();
                                 }
-                            }
-                        },
-                        0,
-                        senderTimeOut * 1000
-                );
-                numBuffered++;
-                nextSeqNo = (byte) ((nextSeqNo + 1) % (maxSeqNo + 1));
-            }
+                            },
+                            senderTimeOut * 1000,
+                            senderTimeOut * 1000
+                    );
+                    numBuffered++;
+                    nextSeqNo = (byte) ((nextSeqNo + 1) % (DataChunkC2S.maxSeqNo + 1));
+                }
+                if (sw) System.out.println();
 
-            if (ioEX.message != null) {                // Check for exception has thrown in thread.
-                throw new IOException(ioEX.message);
-            }
+                if (ioEX.message != null) {                // Check for exception has thrown in thread.
+                    throw new IOException(ioEX.message);
+                }
 
-            // Get ACK. TODO: Make separate thread to check ACK message.
-            int ACKed = Integer.parseInt(dataInputStream.readLine());
-            int logicalACKed = ACKed - firstSeqNo +      // Offset relative to firstSeqNo. -winSize <= logicalACKed.
-                    ((ACKed - firstSeqNo < -winSize) ? (maxSeqNo + 1) : 0);
-            if (0 <= logicalACKed && logicalACKed < numBuffered) {
-                // ACKed sequence number is in range. Mark that it's ACKed.
-                int idx = (winBase + logicalACKed) % winSize;
-                window[idx] = null;
-                timers[idx].cancel();
-                while (window[winBase] == null && numBuffered > 0) {
-                    // If the first sequence in window is ACKed, slide window.
-                    System.out.print(firstSeqNo + " ");
-                    firstSeqNo = (byte) ((firstSeqNo + 1) % (maxSeqNo + 1));
-                    winBase = (winBase + 1) % winSize;
-                    numBuffered--;
-                    remainingChunks--;
+                // Get ACK.
+                // TODO: Make separate thread to check ACK message.
+                int ACKed = Integer.parseInt(dataInputStream.readLine());
+                System.out.println(ACKed + " ACKed");
+                int logicalACKed = ACKed - firstSeqNo +      // Offset relative to firstSeqNo. -winSize <= logicalACKed.
+                        ((ACKed - firstSeqNo < -DataChunkC2S.winSize) ? (DataChunkC2S.maxSeqNo + 1) : 0);
+                if (0 <= logicalACKed && logicalACKed < numBuffered) {
+                    // ACKed sequence number is in range. Mark it's ACKed.
+                    int idx = (winBase + logicalACKed) % DataChunkC2S.winSize;
+                    window[idx] = null;
+                    timers[idx].cancel();
+                    timers[idx] = null;
+                    while (window[winBase] == null && numBuffered > 0) {
+                        // If the first sequence in window is ACKed, slide window.
+                        firstSeqNo = (byte) ((firstSeqNo + 1) % (DataChunkC2S.maxSeqNo + 1));
+                        winBase = (winBase + 1) % DataChunkC2S.winSize;
+                        numBuffered--;
+                        remainingChunks--;
+                    }
                 }
             }
+            System.out.println("  Done.");
+
+        } finally {
+            fileInputStream.close();
+            dataOutputStream.close();
+            dataInputStream.close();
+            dataSocket.close();
         }
 
-        System.out.println("  Done.");
-        dataSocket.close();
-        dataOutputStream.close();
         return 0;
     }
 
+    protected int handleDROP(String[] request) {
+        try {
+            for (int i = 1; i < request.length; i++) {
+                if (request[i].charAt(0) == 'R') {
+                    request[i] = request[i].substring(1);
+                }
+                int chunkNo = Integer.parseInt(request[i]);
+            }
+        } catch (NumberFormatException e) {
+            System.out.println("Failed to parse.");
+            return 1;
+        }
+
+        return 0;
+    }
+
+    protected int handleTIMEOUT(String[] request) {
+        return 0;
+    }
+
+    protected int handleBITERR(String[] request) {
+        return 0;
+    }
 }

@@ -1,8 +1,6 @@
 import ftp.server.Server;
 
 import java.io.IOException;
-import java.lang.reflect.InvocationTargetException;
-import java.nio.file.Path;
 
 public class FTPServer {
 

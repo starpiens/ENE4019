@@ -10,9 +10,9 @@ public class DataChunkS2C {
     public static final int maxDataSize = 1000;
     public static final int maxChunkSize = maxDataSize + 3;
 
-    protected byte seqNo;
-    protected short chkSum;
-    public byte[] data;
+    protected final byte seqNo;
+    protected final short chkSum;
+    public final byte[] data;
 
 
     public DataChunkS2C(
