@@ -13,7 +13,7 @@ public class DataChunkC2S {
     public static final int maxDataSize = 1000;
 
     /* SR parameters */
-    public static final int maxSeqNo = 15;
+    public static final int numSeqNo = 16;      // Sequence numbers are in range [0, numSeqNo).
     public static final int winSize = 5;
 
     /* Header values */

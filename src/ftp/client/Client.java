@@ -7,6 +7,8 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.net.Socket;
 import java.util.*;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.locks.ReentrantLock;
 
 import static java.lang.System.exit;
 
@@ -15,11 +17,6 @@ import static java.lang.System.exit;
  * Provides FTP client functionalities.
  */
 public class Client {
-
-    protected static class ThreadExceptionMessage {
-        public String message = null;
-    }
-
 
     /* Networking */
     protected String host;                      // Host name, or {@code null} for the loopback address.
@@ -291,77 +288,79 @@ public class Client {
         DataChunkC2S[] window = new DataChunkC2S[DataChunkC2S.winSize];  // Stores data chunk.
         Timer[] timers = new Timer[DataChunkC2S.winSize];                // Each timer periodically retransmit chunks.
         int remainingChunks = (int) (file.length() + DataChunkC2S.maxDataSize - 1)
-                / DataChunkC2S.maxDataSize;                 // Number of chunks, not yet ACKed.
-        int winBase = 0;                                    // Index of firstly sent chunk in the window.
-        int numBuffered = 0;                                // Number of buffered chunks in the window.
-        byte firstSeqNo = 0;                                // First sequence number in the window.
-        byte nextSeqNo = 0;                                 // Next sequence number, in range of [0, maxSeqNo].
-        String[] threadIOExcpetion = new String[1];         // Set message if a thread throws IOException.
+                / DataChunkC2S.maxDataSize;             // Number of chunks, not yet ACKed.
+        int[] winBase = {0};                            // Index of firstly sent chunk in the window.
+        int[] numBuffered = {0};                        // Number of buffered chunks in the window.
+        byte[] firstSeqNo = {0};                        // First sequence number in the window.
+        byte nextSeqNo = 0;                             // Next sequence number, in range of [0, maxSeqNo].
+        String[] exceptionMsg = {null};                 // Set message if a thread throws IOException.
+        ReentrantLock lock = new ReentrantLock();       // Locks window related values.
 
+        Thread ackListenerThread = new Thread(new ACKListener(
+                dataInputStream, exceptionMsg, winBase, numBuffered, firstSeqNo, lock, timers
+        ));
+        ackListenerThread.start();
         try {
             // Send file.
             while (remainingChunks > 0) {
                 // Create data chunks, and fill window.
-                while (numBuffered < DataChunkC2S.winSize && numBuffered < remainingChunks) {
-                    int idx = (winBase + numBuffered) % DataChunkC2S.winSize;
+                while (numBuffered[0] < DataChunkC2S.winSize && numBuffered[0] < remainingChunks) {
+                    int idx = (winBase[0] + numBuffered[0]) % DataChunkC2S.winSize;
                     byte[] data = fileInputStream.readNBytes(DataChunkC2S.maxDataSize);
                     window[idx] = new DataChunkC2S(nextSeqNo, data);    // Create data chunk.
-                    if (!srDropList.remove(Integer.valueOf(nextSeqNo))) {
-                        synchronized (dataOutputStream) {                   // Send it.
-                            window[idx].writeBytes(dataOutputStream);
-                        }
-                    }
-                    System.out.println(nextSeqNo + " sent");
                     timers[idx] = new Timer();
                     timers[idx].scheduleAtFixedRate(                    // Setup timer for retransmission, and start it.
                             new TimerTask() {
                                 @Override
                                 public void run() {
                                     try {
+                                        System.out.println(window[idx].getSeqNo() + " timed out, retransmitting");
                                         synchronized (dataOutputStream) {
-                                            System.out.println(window[idx].getSeqNo() + " timed out, retransmitting");
                                             window[idx].writeBytes(dataOutputStream);
                                         }
                                     } catch (IOException e) {
-                                        threadIOExcpetion[0] = e.getMessage();
+                                        exceptionMsg[0] = e.getMessage();
                                     }
                                 }
                             },
                             senderTimeOut * 1000,
                             senderTimeOut * 1000
                     );
-                    numBuffered++;
-                    nextSeqNo = (byte) ((nextSeqNo + 1) % (DataChunkC2S.maxSeqNo + 1));
+                    lock.lock();
+                    numBuffered[0]++;
+                    lock.unlock();
+                    if (nextSeqNo != 2) {       // TODO: For test
+                        synchronized (dataOutputStream) {                   // Send it.
+                            window[idx].writeBytes(dataOutputStream);
+                        }
+                    }
+                    System.out.println("Sent:  " + nextSeqNo + " --> Server");
+                    nextSeqNo = (byte) ((nextSeqNo + 1) % DataChunkC2S.numSeqNo);
                 }
 
-                if (threadIOExcpetion[0] != null) {                // Check for exception has thrown in thread.
-                    throw new IOException(threadIOExcpetion[0]);
+                if (exceptionMsg[0] != null) {                // Check for exception thrown in thread.
+                    throw new IOException(exceptionMsg[0]);
                 }
 
-                // Get ACK.
-                // TODO: Make separate thread to check ACK message.
-                int ACKed = Integer.parseInt(dataInputStream.readLine());
-                System.out.println(ACKed + " ACKed");
-                int logicalACKed = ACKed - firstSeqNo +      // Offset relative to firstSeqNo. -winSize <= logicalACKed.
-                        ((ACKed - firstSeqNo < -DataChunkC2S.winSize) ? (DataChunkC2S.maxSeqNo + 1) : 0);
-                if (0 <= logicalACKed && logicalACKed < numBuffered) {
-                    // ACKed sequence number is in range. Mark it's ACKed.
-                    int idx = (winBase + logicalACKed) % DataChunkC2S.winSize;
-                    window[idx] = null;
-                    timers[idx].cancel();
-                    timers[idx] = null;
-                    while (window[winBase] == null && numBuffered > 0) {
-                        // If the first sequence in window is ACKed, slide window.
-                        firstSeqNo = (byte) ((firstSeqNo + 1) % (DataChunkC2S.maxSeqNo + 1));
-                        winBase = (winBase + 1) % DataChunkC2S.winSize;
-                        numBuffered--;
+                // Slide window.
+                timers[winBase[0]] = timers[winBase[0]];        // Reload, 'cause it bay be modified in ACKListener.
+                while (timers[winBase[0]] == null && numBuffered[0] > 0) {
+                    // If the first sequence in window is ACKed, slide window.
+                    try {
+                        lock.lock();
+                        firstSeqNo[0] = (byte) ((firstSeqNo[0] + 1) % DataChunkC2S.numSeqNo);
+                        winBase[0] = (winBase[0] + 1) % DataChunkC2S.winSize;
+                        numBuffered[0]--;
                         remainingChunks--;
+                    } finally {
+                        lock.unlock();
                     }
                 }
             }
             System.out.println("  Done.");
 
         } finally {
+            ackListenerThread.interrupt();
             fileInputStream.close();
             dataOutputStream.close();
             dataInputStream.close();
