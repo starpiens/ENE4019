@@ -166,14 +166,27 @@ public class Server {
             return 0;
         }
 
-        protected boolean isDirOK(File targetPath) throws IOException {
+        /**
+         * Check availability of path. Return true if target path
+         * has some problem like: Doesn't exist, Not a directory, etc.
+         * It also writes appropriate response to the client.
+         *
+         * @param   targetPath
+         *          Path of the target directory.
+         *
+         * @return  true if there's a problem, or false if not.
+         *
+         * @throws  IOException
+         *          If an IO exception occurred while writing the response.
+         */
+        protected boolean isBadDir(File targetPath) throws IOException {
             if (!targetPath.exists()) {
                 // Target doesn't exist.
                 writeResponse(new Response(
                         ReturnCode.FILE_UNAVAILABLE,
                         "Directory doesn't exist"
                 ));
-                return false;
+                return true;
 
             } else if (!targetPath.isDirectory()) {
                 // Target is not a directory.
@@ -181,10 +194,10 @@ public class Server {
                         ReturnCode.FILE_UNAVAILABLE,
                         "Not a directory"
                 ));
-                return false;
+                return true;
 
             } else {
-                return true;
+                return false;
             }
         }
 
@@ -213,7 +226,7 @@ public class Server {
 
             // Resolve target path.
             File targetPath = pwd.toPath().resolve(request[1]).toFile();
-            if (!isDirOK(targetPath)) {
+            if (isBadDir(targetPath)) {
                 return 1;
             }
 
@@ -377,7 +390,7 @@ public class Server {
                 DataChunkC2S chunk = new DataChunkC2S(header);
                 int seqNo = chunk.getSeqNo();
                 int logicalSeqNo = seqNo - firstSeqNo +     // Offset relative to firstSeqNo. -winSize <= logicalSeqNo.
-                        ((seqNo - firstSeqNo < -DataChunkC2S.winSize) ? (DataChunkC2S.maxSeqNo + 1) : 0);
+                        ((seqNo - firstSeqNo < -DataChunkC2S.winSize) ? DataChunkC2S.numSeqNo : 0);
 
                 if (logicalSeqNo < 0) {
                     // Sender resent it possibly because of dropped ACK. Just ACK back.
@@ -397,7 +410,7 @@ public class Server {
                         System.out.print(firstSeqNo + " ");
                         fileOutputStream.write(window[winBase].data);
                         window[winBase] = null;
-                        firstSeqNo = (byte) ((firstSeqNo + 1) % (DataChunkC2S.maxSeqNo + 1));
+                        firstSeqNo = (byte) ((firstSeqNo + 1) % DataChunkC2S.numSeqNo);
                         winBase = (winBase + 1) % DataChunkC2S.winSize;
                         numBuffered--;
                         remainingChunks--;
@@ -445,7 +458,7 @@ public class Server {
             } else {
                 // Resolve target path.
                 File targetPath = pwd.toPath().resolve(request[1]).toFile();
-                if (!isDirOK(targetPath)) {
+                if (isBadDir(targetPath)) {
                     return 1;
                 }
 
