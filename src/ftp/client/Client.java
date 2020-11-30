@@ -31,9 +31,9 @@ public class Client {
 
     /* Selective Repeat */
     protected final int senderTimeOut = 1;
-    protected ArrayList<Integer> srDropList;
-    protected ArrayList<Integer> srTimeoutList;
-    protected ArrayList<Integer> srBiterrList;
+    protected ArrayList<Integer> srDropList = new ArrayList<>();
+    protected ArrayList<Integer> srTimeoutList = new ArrayList<>();
+    protected ArrayList<Integer> srBiterrList = new ArrayList<>();
 
     // Maps request string to request handler.
     protected final Map<String, Method> requestHandlers;
@@ -47,6 +47,9 @@ public class Client {
         try {
             requestHandlers.put("get", Client.class.getDeclaredMethod("handleGET", String[].class));
             requestHandlers.put("put", Client.class.getDeclaredMethod("handlePUT", String[].class));
+            requestHandlers.put("drop", Client.class.getDeclaredMethod("handleDROP", String[].class));
+            requestHandlers.put("timeout", Client.class.getDeclaredMethod("handleTIMEOUT", String[].class));
+            requestHandlers.put("biterror", Client.class.getDeclaredMethod("handleBITERR", String[].class));
 
         } catch (NoSuchMethodException e) {
             // This exception must not be thrown. Server goes down.
@@ -293,27 +296,22 @@ public class Client {
         int numBuffered = 0;                                // Number of buffered chunks in the window.
         byte firstSeqNo = 0;                                // First sequence number in the window.
         byte nextSeqNo = 0;                                 // Next sequence number, in range of [0, maxSeqNo].
-        ThreadExceptionMessage ioEX = new ThreadExceptionMessage();   // Set message if a thread throws IOException.
+        String[] threadIOExcpetion = new String[1];         // Set message if a thread throws IOException.
 
         try {
             // Send file.
             while (remainingChunks > 0) {
                 // Create data chunks, and fill window.
-                Boolean sw = false;
                 while (numBuffered < DataChunkC2S.winSize && numBuffered < remainingChunks) {
-                    if (!sw) {
-                        System.out.print("Transmitted: ");
-                        sw = true;
-                    }
                     int idx = (winBase + numBuffered) % DataChunkC2S.winSize;
                     byte[] data = fileInputStream.readNBytes(DataChunkC2S.maxDataSize);
                     window[idx] = new DataChunkC2S(nextSeqNo, data);    // Create data chunk.
-                    if (nextSeqNo != 2) {       // TODO: For test
+                    if (!srDropList.remove(Integer.valueOf(nextSeqNo))) {
                         synchronized (dataOutputStream) {                   // Send it.
                             window[idx].writeBytes(dataOutputStream);
                         }
                     }
-                    System.out.print(nextSeqNo + " ");
+                    System.out.println(nextSeqNo + " sent");
                     timers[idx] = new Timer();
                     timers[idx].scheduleAtFixedRate(                    // Setup timer for retransmission, and start it.
                             new TimerTask() {
@@ -325,7 +323,7 @@ public class Client {
                                             window[idx].writeBytes(dataOutputStream);
                                         }
                                     } catch (IOException e) {
-                                        ioEX.message = e.getMessage();
+                                        threadIOExcpetion[0] = e.getMessage();
                                     }
                                 }
                             },
@@ -335,10 +333,9 @@ public class Client {
                     numBuffered++;
                     nextSeqNo = (byte) ((nextSeqNo + 1) % (DataChunkC2S.maxSeqNo + 1));
                 }
-                if (sw) System.out.println();
 
-                if (ioEX.message != null) {                // Check for exception has thrown in thread.
-                    throw new IOException(ioEX.message);
+                if (threadIOExcpetion[0] != null) {                // Check for exception has thrown in thread.
+                    throw new IOException(threadIOExcpetion[0]);
                 }
 
                 // Get ACK.
@@ -375,13 +372,19 @@ public class Client {
     }
 
     protected int handleDROP(String[] request) {
+        String[] reqSplit = request[1].split(",");
+
+        srDropList.clear();
+        srBiterrList.clear();
+        srTimeoutList.clear();
+
         try {
-            for (int i = 1; i < request.length; i++) {
-                if (request[i].charAt(0) == 'R') {
-                    request[i] = request[i].substring(1);
-                }
-                int chunkNo = Integer.parseInt(request[i]);
+            for (String s : reqSplit) {
+                s = s.substring(1);
+                int chunkNo = Integer.parseInt(s);
+                srDropList.add(chunkNo);
             }
+
         } catch (NumberFormatException e) {
             System.out.println("Failed to parse.");
             return 1;
