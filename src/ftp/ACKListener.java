@@ -9,11 +9,11 @@ public class ACKListener implements Runnable {
 
     final BufferedReader dataInputStream;
     final String[] exceptionMsg;
-    final int[] winBase;
-    final int[] numBuffered;
-    final byte[] firstSeqNo;
+    volatile int[] winBase;
+    volatile int[] numBuffered;
+    volatile byte[] firstSeqNo;
     final ReentrantLock lock;
-    final Timer[] timers;
+    volatile Timer[] timers;
 
     public ACKListener(BufferedReader dataInputStream,
                        String[] exceptionMsg,
@@ -36,7 +36,7 @@ public class ACKListener implements Runnable {
         while (true) {
             try {
                 String line = dataInputStream.readLine();
-                if (line == null) break;
+                if (line == null) continue;
                 int ACKed = Integer.parseInt(line);
                 int idx;
                 boolean isValidRange;
@@ -50,13 +50,11 @@ public class ACKListener implements Runnable {
                         timers[idx].cancel();
                         timers[idx] = null;
                     }
-                    synchronized (System.out) {
-                        System.out.println("ACKed: " + ACKed);
-                    }
 
                 } finally {
                     lock.unlock();
                 }
+                System.out.println("ACKed: " + ACKed + " <-- Server");
 
             } catch (IOException e) {
                 exceptionMsg[0] = e.getMessage();

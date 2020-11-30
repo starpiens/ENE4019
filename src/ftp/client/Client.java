@@ -305,47 +305,43 @@ public class Client {
                     int idx = (winBase[0] + numBuffered[0]) % DataChunkC2S.winSize;
                     byte[] data = fileInputStream.readNBytes(DataChunkC2S.maxDataSize);
                     window[idx] = new DataChunkC2S(nextSeqNo, data);    // Create data chunk.
-                    try {
-                        lock.lock();
-                        if (nextSeqNo != 2) {       // TODO: For test
-                            synchronized (dataOutputStream) {                   // Send it.
-                                window[idx].writeBytes(dataOutputStream);
-                            }
-                        }
-                        System.out.println("Transmitted: " + nextSeqNo);
-                        timers[idx] = new Timer();
-                        timers[idx].scheduleAtFixedRate(                    // Setup timer for retransmission, and start it.
-                                new TimerTask() {
-                                    @Override
-                                    public void run() {
-                                        try {
-                                            synchronized (System.out) {
-                                                System.out.println(window[idx].getSeqNo() + " timed out, retransmitting");
-                                            }
-                                            synchronized (dataOutputStream) {
-                                                window[idx].writeBytes(dataOutputStream);
-                                            }
-                                        } catch (IOException e) {
-                                            exceptionMsg[0] = e.getMessage();
+                    timers[idx] = new Timer();
+                    timers[idx].scheduleAtFixedRate(                    // Setup timer for retransmission, and start it.
+                            new TimerTask() {
+                                @Override
+                                public void run() {
+                                    try {
+                                        System.out.println(window[idx].getSeqNo() + " timed out, retransmitting");
+                                        synchronized (dataOutputStream) {
+                                            window[idx].writeBytes(dataOutputStream);
                                         }
+                                    } catch (IOException e) {
+                                        exceptionMsg[0] = e.getMessage();
                                     }
-                                },
-                                senderTimeOut * 1000,
-                                senderTimeOut * 1000
-                        );
-                        numBuffered[0]++;
-                    } finally {
-                        lock.unlock();
+                                }
+                            },
+                            senderTimeOut * 1000,
+                            senderTimeOut * 1000
+                    );
+                    lock.lock();
+                    numBuffered[0]++;
+                    lock.unlock();
+                    if (nextSeqNo != 2) {       // TODO: For test
+                        synchronized (dataOutputStream) {                   // Send it.
+                            window[idx].writeBytes(dataOutputStream);
+                        }
                     }
+                    System.out.println("Sent:  " + nextSeqNo + " --> Server");
                     nextSeqNo = (byte) ((nextSeqNo + 1) % DataChunkC2S.numSeqNo);
                 }
 
                 // System.out.flush();
-                if (exceptionMsg[0] != null) {                // Check for exception has thrown in thread.
+                if (exceptionMsg[0] != null) {                // Check for exception thrown in thread.
                     throw new IOException(exceptionMsg[0]);
                 }
 
                 // Slide window.
+                timers[winBase[0]] = timers[winBase[0]];        // Reload, 'cause it bay be modified in ACKListener.
                 while (timers[winBase[0]] == null && numBuffered[0] > 0) {
                     // If the first sequence in window is ACKed, slide window.
                     try {
@@ -357,33 +353,7 @@ public class Client {
                     } finally {
                         lock.unlock();
                     }
-                    synchronized (System.out) {
-                        System.out.println("window slided");
-                    }
                 }
-
-//                // Get ACK.
-//                int ACKed = Integer.parseInt(dataInputStream.readLine());
-//                System.out.println(ACKed + " ACKed");
-//                int relativeACKed                                 // Offset relative to firstSeqNo. 0 or positive.
-//                        = (ACKed - firstSeqNo + DataChunkC2S.numSeqNo) % DataChunkC2S.numSeqNo;
-//
-////                int logicalACKed = ACKed - firstSeqNo +
-////                        ((ACKed - firstSeqNo < -DataChunkC2S.winSize) ? (DataChunkC2S.maxSeqNo + 1) : 0);
-//                if (relativeACKed < numBuffered) {
-//                    // ACKed sequence number is in range. Mark it's ACKed.
-//                    int idx = (winBase + relativeACKed) % DataChunkC2S.winSize;
-//                    window[idx] = null;
-//                    timers[idx].cancel();
-//                    timers[idx] = null;
-//                    while (window[winBase] == null && numBuffered > 0) {
-//                        // If the first sequence in window is ACKed, slide window.
-//                        firstSeqNo = (byte) ((firstSeqNo + 1) % DataChunkC2S.numSeqNo);
-//                        winBase = (winBase + 1) % DataChunkC2S.winSize;
-//                        numBuffered--;
-//                        remainingChunks--;
-//                    }
-//                }
             }
             System.out.println("  Done.");
 
