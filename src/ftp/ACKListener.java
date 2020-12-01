@@ -12,7 +12,8 @@ public class ACKListener implements Runnable {
     volatile int[] winBase;
     volatile int[] numBuffered;
     volatile byte[] firstSeqNo;
-    final ReentrantLock lock;
+    final ReentrantLock windowLock;
+    final ReentrantLock logLock;
     volatile Timer[] timers;
 
     public ACKListener(BufferedReader dataInputStream,
@@ -20,14 +21,16 @@ public class ACKListener implements Runnable {
                        int[] winBase,
                        int[] numBuffered,
                        byte[] firstSeqNo,
-                       ReentrantLock lock,
+                       ReentrantLock windowLock,
+                       ReentrantLock logLock,
                        Timer[] timers) {
         this.dataInputStream = dataInputStream;
         this.exceptionMsg = exceptionMsg;
         this.winBase = winBase;
         this.numBuffered = numBuffered;
         this.firstSeqNo = firstSeqNo;
-        this.lock = lock;
+        this.windowLock = windowLock;
+        this.logLock = logLock;
         this.timers = timers;
     }
 
@@ -42,7 +45,7 @@ public class ACKListener implements Runnable {
                 boolean isValidRange;
 
                 try {
-                    lock.lock();
+                    windowLock.lock();
                     int relativeACKed = (ACKed - firstSeqNo[0] + DataChunkC2S.numSeqNo) % DataChunkC2S.numSeqNo;
                     idx = (winBase[0] + relativeACKed) % DataChunkC2S.winSize;
                     isValidRange = relativeACKed < numBuffered[0];
@@ -50,11 +53,14 @@ public class ACKListener implements Runnable {
                         timers[idx].cancel();
                         timers[idx] = null;
                     }
+                    logLock.lock();
+                    System.out.println("ACKed: " + ACKed + " <-- Server");
+
 
                 } finally {
-                    lock.unlock();
+                    windowLock.unlock();
+                    logLock.unlock();
                 }
-                System.out.println("ACKed: " + ACKed + " <-- Server");
 
             } catch (IOException e) {
                 exceptionMsg[0] = e.getMessage();

@@ -7,7 +7,6 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.net.Socket;
 import java.util.*;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.locks.ReentrantLock;
 
 import static java.lang.System.exit;
@@ -294,12 +293,16 @@ public class Client {
         byte[] firstSeqNo = {0};                        // First sequence number in the window.
         byte nextSeqNo = 0;                             // Next sequence number, in range of [0, maxSeqNo].
         String[] exceptionMsg = {null};                 // Set message if a thread throws IOException.
-        ReentrantLock lock = new ReentrantLock();       // Locks window related values.
+        ReentrantLock windowLock = new ReentrantLock(); // Locks window related values.
+        ReentrantLock logLock = new ReentrantLock();
+        Vector<Timer> timeOutTimers = new Vector<>();
 
+        // Run ACK Listener.
         Thread ackListenerThread = new Thread(new ACKListener(
-                dataInputStream, exceptionMsg, winBase, numBuffered, firstSeqNo, lock, timers
+                dataInputStream, exceptionMsg, winBase, numBuffered, firstSeqNo, windowLock, logLock, timers
         ));
         ackListenerThread.start();
+
         try {
             // Send file.
             while (remainingChunks > 0) {
@@ -314,27 +317,79 @@ public class Client {
                                 @Override
                                 public void run() {
                                     try {
-                                        System.out.println(window[idx].getSeqNo() + " timed out, retransmitting");
                                         synchronized (dataOutputStream) {
+                                            logLock.lock();
                                             window[idx].writeBytes(dataOutputStream);
+                                            System.out.println("Timeout, resent: " + window[idx].getSeqNo());
                                         }
                                     } catch (IOException e) {
                                         exceptionMsg[0] = e.getMessage();
+                                    } finally {
+                                        logLock.unlock();
                                     }
                                 }
                             },
                             senderTimeOut * 1000,
                             senderTimeOut * 1000
                     );
-                    lock.lock();
+                    windowLock.lock();
                     numBuffered[0]++;
-                    lock.unlock();
-                    if (nextSeqNo != 2) {       // TODO: For test
-                        synchronized (dataOutputStream) {                   // Send it.
-                            window[idx].writeBytes(dataOutputStream);
+                    windowLock.unlock();
+
+                    if (srDropList.contains((int) nextSeqNo)) {
+                        ;   // Don't send it.
+
+                    } else if (srBiterrList.contains((int) nextSeqNo)) {
+                        // Make bit error, and send it.
+                        window[idx].setErr(true);
+                        synchronized (dataOutputStream) {
+                            try {
+                                logLock.lock();
+                                window[idx].writeBytes(dataOutputStream);
+                                System.out.println("Sent:  " + window[idx].getSeqNo() + " --> Server");
+                            } finally {
+                                logLock.unlock();
+                            }
+                        }
+                        window[idx].setErr(false);
+
+                    } else if (srTimeoutList.contains((int) nextSeqNo)) {
+                        // Add timer for sending.
+                        timeOutTimers.add(new Timer());
+                        timeOutTimers.lastElement().schedule(
+                                new TimerTask() {
+                                    final DataChunkC2S data = window[idx];
+
+                                    @Override
+                                    public void run() {
+                                        try {
+                                            synchronized (dataOutputStream) {
+                                                logLock.lock();
+                                                data.writeBytes(dataOutputStream);
+                                                System.out.println("Lately sent: " + data.getSeqNo());
+                                            }
+                                        } catch (IOException e) {
+                                            exceptionMsg[0] = e.getMessage();
+                                        } finally {
+                                            logLock.unlock();
+                                        }
+                                    }
+                                },
+                                2 * senderTimeOut * 1000
+                        );
+
+                    } else {
+                        try {
+                            synchronized (dataOutputStream) {
+                                logLock.lock();
+                                window[idx].writeBytes(dataOutputStream);
+                                System.out.println("Sent:  " + window[idx].getSeqNo() + " --> Server");
+                            }
+                        } finally {
+                            logLock.unlock();
                         }
                     }
-                    System.out.println("Sent:  " + nextSeqNo + " --> Server");
+
                     nextSeqNo = (byte) ((nextSeqNo + 1) % DataChunkC2S.numSeqNo);
                 }
 
@@ -347,13 +402,13 @@ public class Client {
                 while (timers[winBase[0]] == null && numBuffered[0] > 0) {
                     // If the first sequence in window is ACKed, slide window.
                     try {
-                        lock.lock();
+                        windowLock.lock();
                         firstSeqNo[0] = (byte) ((firstSeqNo[0] + 1) % DataChunkC2S.numSeqNo);
                         winBase[0] = (winBase[0] + 1) % DataChunkC2S.winSize;
                         numBuffered[0]--;
                         remainingChunks--;
                     } finally {
-                        lock.unlock();
+                        windowLock.unlock();
                     }
                 }
             }
@@ -365,6 +420,9 @@ public class Client {
             dataOutputStream.close();
             dataInputStream.close();
             dataSocket.close();
+            srDropList.clear();
+            srBiterrList.clear();
+            srTimeoutList.clear();
         }
 
         return 0;
@@ -373,10 +431,8 @@ public class Client {
     protected int handleDROP(String[] request) {
         String[] reqSplit = request[1].split(",");
 
-        srDropList.clear();
         srBiterrList.clear();
         srTimeoutList.clear();
-
         try {
             for (String s : reqSplit) {
                 s = s.substring(1);
@@ -393,10 +449,42 @@ public class Client {
     }
 
     protected int handleTIMEOUT(String[] request) {
+        String[] reqSplit = request[1].split(",");
+
+        srDropList.clear();
+        srBiterrList.clear();
+        try {
+            for (String s : reqSplit) {
+                s = s.substring(1);
+                int chunkNo = Integer.parseInt(s);
+                srTimeoutList.add(chunkNo);
+            }
+
+        } catch (NumberFormatException e) {
+            System.out.println("Failed to parse.");
+            return 1;
+        }
+
         return 0;
     }
 
     protected int handleBITERR(String[] request) {
+        String[] reqSplit = request[1].split(",");
+
+        srDropList.clear();
+        srTimeoutList.clear();
+        try {
+            for (String s : reqSplit) {
+                s = s.substring(1);
+                int chunkNo = Integer.parseInt(s);
+                srBiterrList.add(chunkNo);
+            }
+
+        } catch (NumberFormatException e) {
+            System.out.println("Failed to parse.");
+            return 1;
+        }
+
         return 0;
     }
 }

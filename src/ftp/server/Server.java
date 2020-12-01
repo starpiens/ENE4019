@@ -393,8 +393,9 @@ public class Server {
                         ((seqNo - firstSeqNo < -DataChunkC2S.winSize) ? DataChunkC2S.numSeqNo : 0);
 
                 if (logicalSeqNo < 0) {
-                    // Sender resent it possibly because of dropped ACK. Just ACK back.
+                    // Sender resent it possibly because of dropped ACK. Just ACK it back.
                     dataOutputStream.writeBytes(Integer.toString(seqNo) + '\n');
+
                 } else if (logicalSeqNo < DataChunkC2S.winSize) {
                     // Sequence number is in range. Buffer it, and ACK.
                     chunk.setData(

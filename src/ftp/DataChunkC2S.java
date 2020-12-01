@@ -18,7 +18,7 @@ public class DataChunkC2S {
 
     /* Header values */
     protected final byte seqNo;       // Sequence number.
-    protected final short chkSum;     // Checksum value. It is regarded that bit error has occurred, if the value != 0x0000.
+    protected short chkSum;     // If the value != 0x00, it is regarded that bit error has occurred.
     protected final short size;       // Size of data.
     public byte[] data;
 
@@ -33,7 +33,7 @@ public class DataChunkC2S {
         this.seqNo = seqNo;
         this.size = (short) data.length;
         this.data = data;
-        this.chkSum = 0x0000;
+        this.chkSum = 0x00;
     }
 
     public DataChunkC2S(byte[] header) {
@@ -46,6 +46,7 @@ public class DataChunkC2S {
     public void setData(byte[] data) {
         this.data = data;
     }
+    public void setErr(boolean bool) { this.chkSum = (short) (bool ? 0xffff : 0x0000); }
 
     public void writeBytes(DataOutputStream dataOutputStream) throws IOException {
         dataOutputStream.writeByte(seqNo);
