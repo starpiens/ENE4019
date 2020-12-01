@@ -354,7 +354,8 @@ public class Server {
             }
 
             // Resolve target path and check availability.
-            File file = pwd.toPath().resolve(request[1]).toFile();
+            String name = new File(request[1]).getName();
+            File file = pwd.toPath().resolve(name).toFile();
             if (file.exists()) {
                 // If target file name already exists, deny.
                 writeResponse(new Response(
