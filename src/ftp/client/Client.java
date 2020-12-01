@@ -46,14 +46,13 @@ public class Client {
             requestHandlers.put("drop", Client.class.getDeclaredMethod("handleDROP", String[].class));
             requestHandlers.put("timeout", Client.class.getDeclaredMethod("handleTIMEOUT", String[].class));
             requestHandlers.put("biterror", Client.class.getDeclaredMethod("handleBITERR", String[].class));
+            requestHandlers.put("quit", Client.class.getDeclaredMethod("handleQUIT", String[].class));
 
         } catch (NoSuchMethodException e) {
             // This exception must not be thrown. Server goes down.
             e.printStackTrace();
             exit(1);
         }
-
-        srDropList = new ArrayList<>(15);
 
     }
 
@@ -98,7 +97,7 @@ public class Client {
         } finally {
             // Cleanup connection.
             try {
-                handleRequest(new String[]{"quit"});
+                writeRequest(new String[]{"quit"});
                 stdReader.close();
                 cmdReader.close();
                 ctrlOutStream.close();
@@ -337,7 +336,8 @@ public class Client {
                     windowLock.unlock();
 
                     if (srDropList.contains((int) nextSeqNo)) {
-                        ;   // Don't send it.
+                        // Don't send it.
+                        System.out.println("Sent:  " + window[idx].getSeqNo() + " --> Server");
 
                     } else if (srBiterrList.contains((int) nextSeqNo)) {
                         // Make bit error, and send it.
@@ -366,7 +366,6 @@ public class Client {
                                             synchronized (dataOutputStream) {
                                                 logLock.lock();
                                                 data.writeBytes(dataOutputStream);
-                                                System.out.println("Lately sent: " + data.getSeqNo());
                                             }
                                         } catch (IOException e) {
                                             exceptionMsg[0] = e.getMessage();
@@ -377,6 +376,7 @@ public class Client {
                                 },
                                 2 * senderTimeOut * 1000
                         );
+                        System.out.println("Sent:  " + window[idx].getSeqNo() + " --> Server");
 
                     } else {
                         try {
@@ -486,5 +486,9 @@ public class Client {
         }
 
         return 0;
+    }
+
+    protected int handleQUIT(String[] request) {
+        return -1;
     }
 }
